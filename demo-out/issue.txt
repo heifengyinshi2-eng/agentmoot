@@ -1,0 +1,42 @@
+======================================================================
+【场景1】dep-app 给 base-lib 提 issue，base-lib 维护者评审并解决（走 HTTP 服务）
+======================================================================
+
+[dep-app] 创建 issue I-001: JSON 序列化大整数（> 2^53）精度丢失
+  正文: ## 问题
+base-lib 的 JSON 序列化在遇到超过 2^53 的整数（雪花 ID、订单号、纳秒时间戳等）时会发生精度丢失，序列化结果被舍入，导致数据不可逆。
+
+## 复现步骤
+1. 安装 base-lib（当前最新版本）。
+2. 执行：
+```js
+const lib = require('base-lib');
+const v = 9007199254740993n; // 2^53 + 1
+const s = lib.stringify({ id: v });
+console.log(s);
+console.log(JSON.parse(s).id);
+```
+3. 观察输出。
+
+## 实际行为
+输出 `{"id":9007199254740992}`，末尾 93 被舍入为 92，`parse(stringify(x))` 无法还原原值。
+
+## 期望行为
+大整数序列化后保持原始精度，例如 `{"id":"9007199254740993"}` 或其他可逆表示；即对任意大整数满足 `parse(stringify(x)) === x`。
+
+## 影响
+dep-app 的实体 ID 经 base-lib 序列化后与数据库、下游服务不一致，导致记录查不到或关联错误。请评估修复方案（如大整数转字符串输出）。
+
+[base-lib] 评审 → accepted（大整数精度丢失是真实且常见的兼容性问题：JSON 中常出现雪花 ID、订单号、纳秒时间戳等超过 2^53 的整数，序列化时静默舍入会破坏数据可逆性与跨服务一致性。issue 的复现、实际行为（末位被舍入为偶数）、期望行为（无损表示）均清晰合理，且影响面（dep-app 实体 ID 与数据库/下游不一致）成立。应在序列化层提供无损方案，如支持 BigInt 并默认将超出 ±Number.MAX_SAFE_INTEGER 的整数序列化为字符串，同时提供配置项显式选择旧的 number 行为；默认输出格式变化需按语义化版本发布并在变更说明中提示依赖方调整反序列化。）
+
+[base-lib] resolve → 根因：stringify 把 BigInt 和超出安全范围的整数先转成 Number 再序列化，导致 >2^53 的值被静默舍入；parse 也没有对应的恢复逻辑。修复：序列化层直接识别 bigint 及 |n|>Number.MAX_SAFE_INTEGER 的整数，统一输出为十进制字符串（如 id 变为 "9007199254740993"），不再经过 Number；无损模式默认开启，并保留 legacyNumberMode 配置显式回退旧的 number 行为（仅作过渡，仍存在精度风险）。同时给 parse 增加 BigInt reviver 选项：开启后这类字符串会还原为 BigInt，从而满足 parse(stringify(x)) === x；默认 parse 返回字符串，与线格式一致。对使用方的影响：ID 等字段在线路上的类型由 number 变为 string，dep-app 需按字符串比较和透传、DB 层按字符串绑定，不能直接做算术；默认线格式变化属于可观察行为变更，按 semver major 发布，并在 CHANGELOG 中说明迁移方式（未开启 reviver 时按字符串处理）。
+
+[dep-app] 验收 → accept：
+
+[系统] issue I-001 关闭 → closed
+
+======================================================================
+最终 issue 状态:
+  I-001 [closed] JSON 序列化大整数（> 2^53）精度丢失
+    - base-lib: 根因：stringify 把 BigInt 和超出安全范围的整数先转成 Number 再序列化，导致 >2^53 的值被静默舍入；parse 也没有对应的恢复逻辑。修复：序列化层直接识别 bigint 及 |n|>Number.MAX_SAFE_INTEGER 的整数，统一输出为十进制字符串（如 id 变为 "9007199254740993"），不再经过 Number；无损模式默认开启，并保留 legacyNumberMode 配置显式回退旧的 number 行为（仅作过渡，仍存在精度风险）。同时给 parse 增加 BigInt reviver 选项：开启后这类字符串会还原为 BigInt，从而满足 parse(stringify(x)) === x；默认 parse 返回字符串，与线格式一致。对使用方的影响：ID 等字段在线路上的类型由 number 变为 string，dep-app 需按字符串比较和透传、DB 层按字符串绑定，不能直接做算术；默认线格式变化属于可观察行为变更，按 semver major 发布，并在 CHANGELOG 中说明迁移方式（未开启 reviver 时按字符串处理）。
+    - dep-app: 

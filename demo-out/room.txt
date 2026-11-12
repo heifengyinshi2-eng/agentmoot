@@ -1,0 +1,105 @@
+======================================================================
+【场景2】三方会议：base 改接口，mw/app 表态，chair 引导收敛（走 HTTP 服务）
+======================================================================
+
+[系统] 会议 R-001 创建，参与方 ['base', 'mw', 'app']，chair=facilitator
+
+────────────────────────────────────────────────────────────
+处理提案 P1（发起方 base）：X 接口参数从 int 改为 string 以支持大整数
+
+  —— 第 1 轮表态（并行盲投）——
+    [mw] → supplement：补充: 版本 v1：X 接口新增字符串重载以支持大整数，同时保留既有 int 接口。
+
+签名：
+`void setX(int x); int getX();`（既有语义不变）
+`void setXString(string x); string getXString();`（新增大整数通道）
+
+语义：x 为十进制整数字符串，接收方按 BigInt 解析；格式固定为 `^-?(0|[1-9][0-9]*)$`（禁止前导零、+号、空白、空串），不合格式返回 E_FORMAT；数值超出有符号 64 位范围返回 E_RANGE。
+    [app] → accept
+
+    [chair] 判定 → continue：分歧点：P1 v1 主张将 int 参数改为 string，破坏兼容；mw 补充主张保留 int 并新增 string 重载（setXString），即兼容路线。两者互斥。请 mw 与 app 就“是否允许破坏性变更”表态，并请 base 据此出 P1 v2 单一方案（替换或重载二选一），再表态。
+    [base] 提出新版本 v2：P1 v2 单一方案（二选一，采用「兼容新增」路线，放弃 int→string 破坏性替换）
+
+一、现状问题
+现有签名 void setX(int x); int getX(); 在超过 2^53 的场景经 JS/跨语言 JSON 传输会丢精度，int 字段本身也无法承载大整数；但直接把参数类型改成 string 会同时破坏既有调用方、已持久化数据和线上协议（当前协议无版本协商、无灰度字段），属于不可接受的破坏性变更。
+
+二、诉求
+1) 支持大整数（十进制字符串）写入与读回；2) 既有 setX(int)/getX() 的签名、语义、序列化字段、错误码完全不变；3) 新旧调用方可并存、按调用方灰度、可随时回滚。
+
+三、方案：保留 int 接口，新增具名字符串接口（不做同名重载，避免隐式转换歧义）
+
+接口签名（Java 示意，其他语言同构）：
+
+    public interface XService {
+        // 既有接口，语义与错误码完全不变
+        void setX(int x);
+        int getX();
+
+        // 新增：字符串入口/出口
+        void setXString(String x);   // 输入十进制整数字符串
+        String getXString();         // 输出规范十进制字符串
+    }
+
+内部状态：单一不可变对象，BigInteger 为唯一真值，int 仅作范围内缓存：
+
+    final class XState {
+        final BigInteger value;  // 唯一真值
+        final Integer asInt;     // 落在 int 范围时为缓存值，否则 null
+    }
+    private volatile XState state = new XState(BigInteger.ZERO, 0);
+
+流转：
+- setX(int x)：state = new XState(BigInteger.valueOf(x), x)；
+- setXString(String s)：先校验格式，再规范化（去前导零、-0→0），最后 state = new XState(v, v.bitLength() < 32 ? v.intValue() : null)；
+- getX()：state.asInt != null 时返回 asInt，否则抛 E_RANGE（明确：字符串写入超出 int 后再调旧 getX 报 E_RANGE，绝不截断/溢出）；
+- getXString()：返回 state.value.toString()。
+
+输入输出边界（setXString）：
+- null、空串、"+"、"-" → E_FORMAT；
+- 含空白、下划线、小数点、科学计数、0x 前缀 → E_FORMAT（不 trim、不猜测）；
+- 不匹配 ^[+-]?[0-9]+$ → E_FORMAT；
+- "0"/"-0"/"+0"/"000" → 接受，规范化为 "0"；
+- "00123" → 接受，规范化为 "123"；
+- 去符号与前导零后的位数 > MAX_DIGITS(4096，可配) → E_RANGE（防 DoS）；
+- 合法且在位数上限内 → 成功存储 BigInteger。
+getXString 输出恒为：无前导零、无 "+"、负数带 "-"、零为 "0"，不返回 null。
+
+协议/序列化（若 X 走 JSON 或 RPC）：
+- 读请求最多出现一个字段：{"x":123} 走旧路径，{"xStr":"12345678901234567890"} 走新路径；两字段同时出现且数值不一致 → E_CONFLICT，一致则接受；
+- 写响应：值在 int 范围时同时输出 x 与 xStr（旧客户端可读）；超出 int 时只输出 xStr、省略 x，旧客户端按既有「字段缺失」逻辑处理，绝不拿到错误值；
+- 不改变既有字段类型，不把超范围值塞进 x 字段。
+
+兼容与回滚：setX(int) 不校验 MAX_DIGITS（int 天然很小），异常类型、错误码、日志格式不变。新接口以新增方法/新增可选字段落地，服务端先上线读兼容；调用方按需切换 setXString；回滚仅需调用方改回 setX，无需数据迁移（值在 int 范围内可无损降级，超出范围时 setX 无法表达，由业务侧按 E_RANGE 处理）。
+
+测试要点（必须覆盖）：
+- int 路径回归：Integer.MIN_VALUE / MAX_VALUE / 0 / -1；
+- 数值边界：2^31-1、2^31、2^53、2^63、10^4096-1、10^4096；
+- 格式：null、空串、单独符号、前导零、空白、全角数字 → 对应 E_FORMAT；
+- 并发：setXString 与 getX/getXString 并发，读到的必须是完整旧值或完整新值（volatile 不可变对象保证）；
+- 协议：双字段冲突 → E_CONFLICT；超 int 时旧客户端收到缺失 x 而非错误值。
+
+表态：base 接受 mw 的兼容路线，正式撤回 v1 的「int 改 string」替换方案，v2 唯一采用「保留 int + 新增 setXString/getXString」。理由：在无协议版本协商的前提下，破坏性替换的迁移面与线上风险不可控；具名新增接口可同时满足大整数诉求与零破坏，并为后续再评估「是否废弃 int」保留空间（该议题不在本提案范围，需单独立项）。
+
+  —— 第 2 轮表态（并行盲投）——
+    [mw] → accept
+    [app] → accept
+
+    [chair] 判定 → agree：P1 v2 已获 base、mw、app 三方一致接受：撤回 v1 的破坏性替换，采用「保留 int + 新增 setXString/getXString」兼容路线。待办：服务端先行上线读兼容，再配合灰度；测试覆盖 int 回归、数值边界、格式错误、并发与双字段冲突。未决项：「是否废弃 int」单独立项，另议。
+    ✓ 提案 P1 达成
+
+────────────────────────────────────────────────────────────
+决议汇编
+  chair 决议：
+分工：base 按 P1 v2 实现兼容方案（保留 setX(int)/getX()，新增 setXString/getXString，并完成协议兼容与测试）；mw 保持旧 int 路径不变，新增字符串路径透传；app 按需接入 setXString/getXString，按字符串比较与透传。共识决议：P1 v2 已获 base、mw、app 三方一致同意，采用“保留 int + 新增字符串接口”的兼容路线，撤回 P1 v1 破坏性替换；服务端先上线读兼容，按调用方灰度、可随时回滚；测试覆盖 int 回归、数值边界、格式错误、并发及双字段冲突。未决项：是否废弃 int 接口，需单独立项另议。
+  会议状态 → agreed
+
+────────────────────────────────────────────────────────────
+决议 → 生成 issue
+  → I-001 指派给 base（决议来源）
+  → I-002 指派给 mw（决议来源）
+  → I-003 指派给 app（决议来源）
+
+======================================================================
+最终会议状态:
+  R-001 [agreed] 大整数接口变更协调
+    - 提案 P1 v2 [agreed]

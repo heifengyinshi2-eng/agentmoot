@@ -1,0 +1,6 @@
+{
+  "name": "base-lib",
+  "version": "1.0.0",
+  "description": "JSON 序列化基础库",
+  "main": "index.js"
+}

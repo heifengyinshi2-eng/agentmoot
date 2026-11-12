@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>agentmoot MVP 跑测报告</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+:root {
+  --bg:#0f1216; --card:#171c24; --border:#262d3a; --fg:#d7dde6; --dim:#8b96a8;
+  --accent:#4da3ff; --green:#3ecf8e; --amber:#e0b84e; --red:#ff6b6b; --code:#10151c;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--fg);
+  font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; line-height:1.6; }
+.wrap { max-width:1080px; margin:0 auto; padding:32px 20px 80px; }
+header { border-bottom:1px solid var(--border); padding-bottom:20px; margin-bottom:28px; }
+h1 { font-size:26px; margin:0 0 6px; }
+.meta { color:var(--dim); font-size:13px; }
+h2 { font-size:18px; margin:0 0 10px; color:var(--accent); }
+h3 { font-size:15px; margin:22px 0 8px; color:var(--fg); }
+.card { background:var(--card); border:1px solid var(--border); border-radius:10px;
+  padding:22px 24px; margin-bottom:24px; }
+.sub { color:var(--dim); font-size:13px; margin-bottom:12px; }
+.code { background:var(--code); border:1px solid var(--border); border-radius:8px;
+  padding:16px 18px; overflow-x:auto; font-family:"SF Mono",Consolas,"Cascadia Code",monospace;
+  font-size:12.5px; line-height:1.55; white-space:pre-wrap; word-break:break-word; }
+.mermaid { background:var(--code); border:1px solid var(--border); border-radius:8px;
+  padding:16px; text-align:center; }
+table { border-collapse:collapse; width:100%; font-size:13px; }
+th,td { border:1px solid var(--border); padding:8px 12px; text-align:left; }
+th { background:#1c2330; color:var(--fg); }
+.ok { color:var(--green); font-weight:600; }
+.badge { display:inline-block; padding:1px 9px; border-radius:12px; font-size:12px;
+  font-weight:600; margin-right:6px; }
+.b-ok { background:rgba(62,207,142,.15); color:var(--green); }
+.b-llm { background:rgba(77,163,255,.15); color:var(--accent); }
+.b-det { background:rgba(224,184,78,.15); color:var(--amber); }
+.note { background:rgba(77,163,255,.08); border-left:3px solid var(--accent);
+  padding:10px 14px; border-radius:6px; margin:14px 0; font-size:13px; }
+ul { margin:8px 0; padding-left:22px; }
+li { margin:4px 0; }
+.tag { color:var(--dim); font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>agentmoot — MVP 跑测报告</h1>
+  <div class="meta">生成时间 2026-11-11 · 场景：跨项目 issue 闭环 + 多方 room 会议收敛 · 驱动：pi -p（LLM Agent）</div>
+</header>
+
+<section class="card">
+  <h2>验证结果总览</h2>
+  <table>
+    <tr><th>验证项</th><th>方式</th><th>结果</th></tr>
+    <tr><td>状态机迁移合法性 / 重复表态去重 / 确定性兜底</td><td>脚本 smoke（无 LLM）</td><td class="ok">通过</td></tr>
+    <tr><td>issue + room 完整流程骨架</td><td>确定性演示（秒级）</td><td class="ok">通过</td></tr>
+    <tr><td>issue 闭环（真实 LLM Agent）</td><td>pi -p 驱动</td><td class="ok">通过（创建→评审→解决→验收→关闭）</td></tr>
+    <tr><td>room 多方收敛（真实 LLM Agent）</td><td>pi -p 驱动</td><td class="ok">通过（2 轮盲投 → chair 引导 → 修订 → 一致通过 → 生成 issue）</td></tr>
+  </table>
+</section>
+
+<section class="card">
+  <h2>room 核心流程</h2>
+  <div class="sub">逐提案串行 · 并行盲投 · chair 判定节点 · 决议事实确认</div>
+  <pre class="mermaid">flowchart TD
+    Start([room 创建：议程=一组具体提案&lt;br/&gt;每个带动机背景/诉求；参与方 + chair]) --&gt; Open
+    Open[开场：chair 复述议程，确认全员到齐] --&gt; Pick
+    Pick{还有未处理提案？} -- 是 --&gt; C1
+    Pick -- 否 --&gt; D1
+    subgraph C [逐提案收敛 · 串行]
+        C1[当前提案 版本 v] --&gt; C2[一轮：全员并行盲投表态&lt;br/&gt;接受（无文本） / 反对+说明 / 补充&lt;br/&gt;发起人默认接受不参与]
+        C2 --&gt; CJ[chair 判定节点]
+        CJ --&gt; CJ1{判定}
+        CJ1 -- 全员接受 --&gt; C4[该提案：达成] --&gt; Pick
+        CJ1 -- 有反对/补充 --&gt; CJ2[chair 引导（不给方案）&lt;br/&gt;偏离主题则拉回] --&gt; C5[发起方优先调整 / 反对方提建议] --&gt; C1
+        CJ1 -- 反对含新提案 / 发起人补新提案 --&gt; C6[追加为新提案] --&gt; C1
+        CJ1 -- 发起人无法调整 / chair判无法达成 --&gt; C7[该提案：无法达成，记录] --&gt; Pick
+        CJ1 -- 超时/缺席 --&gt; CJ3[chair 判断：再等 / 无法恢复] --&gt; C1
+    end
+    D1[chair 汇编决议：分工 + 共识&lt;br/&gt;（提案编号+修订号指代）+ 未决项] --&gt; D2[全员简单确认 / 异议]
+    D2 -- 异议 --&gt; D3[chair 裁定] --&gt; D2
+    D2 -- 全员确认 --&gt; D4[一致通过 → 自动生成 issue] --&gt; EndOK([正常结束])
+    C2 -.整体失败.-&gt; Fail([失败])
+    C2 -.升级阻塞.-&gt; Esc[等待上级裁决] --&gt; C1</pre>
+  <h3>issue 状态机</h3>
+  <pre class="mermaid">stateDiagram-v2
+    [*] --&gt; open
+    open --&gt; rejected: 评审否决
+    open --&gt; duplicate: 评审判重复
+    open --&gt; accepted: 评审通过
+    accepted --&gt; resolved: 维护者完成
+    resolved --&gt; closed: 归档
+    note right of closed : 发起方验收不满 → 另提 issue，不回滚</pre>
+</section>
+
+<section class="card">
+  <h2>参会成员守则（按角色区分）</h2>
+  <div class="sub">已注入各角色 prompt，详见 docs/committee-code.md</div>
+  <h3>发起方守则</h3>
+  <pre class="code">【发起方守则】
+1. 你是提案的设计者，方案必须说详细：涉及接口/协议/数据结构/状态机变更时，必须给出代码或伪代码（签名、字段、流转、输入输出、边界行为）。
+2. 发言三要素：自然说清问题（现状哪里不对）、诉求（要解决什么）、解决方案（具体怎么改，含代码/伪代码）；缺一不合格，不要机械分三段列标题。
+3. 简明但完整：不堆背景、不车轱辘话；但方案本身不能含糊，要能落到可执行。</pre>
+  <h3>非发起参与方守则</h3>
+  <pre class="code">【参会成员守则】（针对非发起方：表态/提反对/提补充）
+1. 以问题和诉求为主：说清问题（现状哪里不对）、诉求（我方需要/不能接受什么）；解决方案只需简要说明方向即可，不要替发起方写完整方案或代码。
+2. 简明扼要：一句话能说清不用一段；禁止车轱辘话、重复已定内容、堆砌背景。
+3. 就事论事：只对提案本身表态，只说自己项目的约束边界，不替别的项目做决定；领域否决要给出&quot;不能接受的具体点&quot;。
+4. 表态边界：accept 无附加文本；reject 说清问题+诉求+不能接受的具体点；supplement 给出问题+诉求+简版方案方向。</pre>
+  <h3>主持守则（chair）</h3>
+  <pre class="code">【主持守则】
+只引导不给方案；判定时归纳分歧点、以提案编号+修订号指代；决议汇编列出分工、共识、未决项。简明扼要，就事论事。</pre>
+</section>
+
+
+<section class="card">
+  <h2>测试 1 · 状态机 smoke（确定性）</h2>
+  <div class="sub">验证非法迁移拦截、未全员接受不得判 agree、重复表态去重</div>
+  <pre class="code">1. issue 创建: I-001 open
+2. issue 迁移 open-&gt;accepted-&gt;resolved-&gt;closed = closed
+3. 非法迁移拦截: issue I-001 当前状态 closed，不能评审
+4. 发起人免表态拦截: base 是提案发起人，默认接受，无需表态
+5. 第1轮后全员接受? False
+6. 未全员接受判 agree 被拦截: 未全员接受，不能判 agree
+7. 第2轮(修订后)全员接受? True
+8. room 状态: agreed 提案: [&#x27;agreed&#x27;]
+9. 重复/发起人表态去重: base 是提案发起人，默认接受，无需表态
+SMOKE ALL PASS
+</pre>
+</section>
+
+
+<section class="card">
+  <h2>测试 2 · 确定性演示（秒级）</h2>
+  <div class="sub">无 LLM，固定表态驱动，快速查看完整流程</div>
+  <span class="badge b-det">确定性</span><pre class="code">======================================================================
+【场景1】issue：dep-app → base-lib（点对点异步）
+======================================================================
+[dep-app] 创建 I-001: 大整数序列化精度丢失（open）
+[base-lib] 评审 → accepted
+[base-lib] resolve → 大整数改为字符串表示
+[dep-app] 验收 → 通过
+[系统] I-001 → closed
+
+======================================================================
+【场景2】room：三方会议（base/mw/app + chair）
+======================================================================
+[系统] 会议 R-001 创建，参与方 base/mw/app，chair=facilitator
+
+  提案 P1 v1 第 1 轮表态（发起人 base 默认接受）：
+    [mw] reject: 中间件依赖 X 的 int 语义，不能直接改
+    [app] supplement: 建议新增 string 分支，保留 int 兼容
+    [base] accept（发起人默认，不表态）
+    [chair] → continue：请 base 给出兼容方案
+
+  [base] 新版本 v2：X 参数改为 int|string 联合类型
+
+  提案 P1 v2 第 2 轮表态：
+    [mw/app] 显式 accept；[base] 发起人默认 accept
+    全员接受？True
+    [chair] → agree（提案达成）
+
+[chair] 决议：一致通过 P1 v2：base 实现 int|string 联合类型，mw 透传 string，app 按类型分支解析。
+[系统] 会议 → agreed
+
+决议 → 生成 issue：
+    I-002 → base（决议来源）
+    I-003 → mw（决议来源）
+    I-004 → app（决议来源）
+
+======================================================================
+最终状态：
+  issue  I-001 [closed]
+  room   R-001 [agreed]  提案 [&#x27;agreed&#x27;]
+</pre>
+</section>
+
+
+<section class="card">
+  <h2>测试 3 · issue 闭环（LLM Agent）</h2>
+  <div class="sub">dep-app 提 issue → base-lib 评审 accepted → resolve → dep-app 验收 → closed</div>
+  <span class="badge b-llm">LLM Agent</span><pre class="code">======================================================================
+【场景1】dep-app 给 base-lib 提 issue，base-lib 维护者评审并解决（走 HTTP 服务）
+======================================================================
+
+[dep-app] 创建 issue I-001: JSON 序列化大整数（&gt; 2^53）精度丢失
+  正文: ## 问题
+base-lib 的 JSON 序列化在遇到超过 2^53 的整数（雪花 ID、订单号、纳秒时间戳等）时会发生精度丢失，序列化结果被舍入，导致数据不可逆。
+
+## 复现步骤
+1. 安装 base-lib（当前最新版本）。
+2. 执行：
+```js
+const lib = require(&#x27;base-lib&#x27;);
+const v = 9007199254740993n; // 2^53 + 1
+const s = lib.stringify({ id: v });
+console.log(s);
+console.log(JSON.parse(s).id);
+```
+3. 观察输出。
+
+## 实际行为
+输出 `{&quot;id&quot;:9007199254740992}`，末尾 93 被舍入为 92，`parse(stringify(x))` 无法还原原值。
+
+## 期望行为
+大整数序列化后保持原始精度，例如 `{&quot;id&quot;:&quot;9007199254740993&quot;}` 或其他可逆表示；即对任意大整数满足 `parse(stringify(x)) === x`。
+
+## 影响
+dep-app 的实体 ID 经 base-lib 序列化后与数据库、下游服务不一致，导致记录查不到或关联错误。请评估修复方案（如大整数转字符串输出）。
+
+[base-lib] 评审 → accepted（大整数精度丢失是真实且常见的兼容性问题：JSON 中常出现雪花 ID、订单号、纳秒时间戳等超过 2^53 的整数，序列化时静默舍入会破坏数据可逆性与跨服务一致性。issue 的复现、实际行为（末位被舍入为偶数）、期望行为（无损表示）均清晰合理，且影响面（dep-app 实体 ID 与数据库/下游不一致）成立。应在序列化层提供无损方案，如支持 BigInt 并默认将超出 ±Number.MAX_SAFE_INTEGER 的整数序列化为字符串，同时提供配置项显式选择旧的 number 行为；默认输出格式变化需按语义化版本发布并在变更说明中提示依赖方调整反序列化。）
+
+[base-lib] resolve → 根因：stringify 把 BigInt 和超出安全范围的整数先转成 Number 再序列化，导致 &gt;2^53 的值被静默舍入；parse 也没有对应的恢复逻辑。修复：序列化层直接识别 bigint 及 |n|&gt;Number.MAX_SAFE_INTEGER 的整数，统一输出为十进制字符串（如 id 变为 &quot;9007199254740993&quot;），不再经过 Number；无损模式默认开启，并保留 legacyNumberMode 配置显式回退旧的 number 行为（仅作过渡，仍存在精度风险）。同时给 parse 增加 BigInt reviver 选项：开启后这类字符串会还原为 BigInt，从而满足 parse(stringify(x)) === x；默认 parse 返回字符串，与线格式一致。对使用方的影响：ID 等字段在线路上的类型由 number 变为 string，dep-app 需按字符串比较和透传、DB 层按字符串绑定，不能直接做算术；默认线格式变化属于可观察行为变更，按 semver major 发布，并在 CHANGELOG 中说明迁移方式（未开启 reviver 时按字符串处理）。
+
+[dep-app] 验收 → accept：
+
+[系统] issue I-001 关闭 → closed
+
+======================================================================
+最终 issue 状态:
+  I-001 [closed] JSON 序列化大整数（&gt; 2^53）精度丢失
+    - base-lib: 根因：stringify 把 BigInt 和超出安全范围的整数先转成 Number 再序列化，导致 &gt;2^53 的值被静默舍入；parse 也没有对应的恢复逻辑。修复：序列化层直接识别 bigint 及 |n|&gt;Number.MAX_SAFE_INTEGER 的整数，统一输出为十进制字符串（如 id 变为 &quot;9007199254740993&quot;），不再经过 Number；无损模式默认开启，并保留 legacyNumberMode 配置显式回退旧的 number 行为（仅作过渡，仍存在精度风险）。同时给 parse 增加 BigInt reviver 选项：开启后这类字符串会还原为 BigInt，从而满足 parse(stringify(x)) === x；默认 parse 返回字符串，与线格式一致。对使用方的影响：ID 等字段在线路上的类型由 number 变为 string，dep-app 需按字符串比较和透传、DB 层按字符串绑定，不能直接做算术；默认线格式变化属于可观察行为变更，按 semver major 发布，并在 CHANGELOG 中说明迁移方式（未开启 reviver 时按字符串处理）。
+    - dep-app: 
+</pre>
+</section>
+
+
+<section class="card">
+  <h2>测试 4 · room 多方收敛（LLM Agent）</h2>
+  <div class="sub">三方并行盲投表态 → chair 引导 → 发起方修订 v2 → 全员接受 → 决议生成 issue</div>
+  <span class="badge b-llm">LLM Agent</span><pre class="code">======================================================================
+【场景2】三方会议：base 改接口，mw/app 表态，chair 引导收敛（走 HTTP 服务）
+======================================================================
+
+[系统] 会议 R-001 创建，参与方 [&#x27;base&#x27;, &#x27;mw&#x27;, &#x27;app&#x27;]，chair=facilitator
+
+────────────────────────────────────────────────────────────
+处理提案 P1（发起方 base）：X 接口参数从 int 改为 string 以支持大整数
+
+  —— 第 1 轮表态（并行盲投）——
+    [mw] → supplement：补充: 版本 v1：X 接口新增字符串重载以支持大整数，同时保留既有 int 接口。
+
+签名：
+`void setX(int x); int getX();`（既有语义不变）
+`void setXString(string x); string getXString();`（新增大整数通道）
+
+语义：x 为十进制整数字符串，接收方按 BigInt 解析；格式固定为 `^-?(0|[1-9][0-9]*)$`（禁止前导零、+号、空白、空串），不合格式返回 E_FORMAT；数值超出有符号 64 位范围返回 E_RANGE。
+    [app] → accept
+
+    [chair] 判定 → continue：分歧点：P1 v1 主张将 int 参数改为 string，破坏兼容；mw 补充主张保留 int 并新增 string 重载（setXString），即兼容路线。两者互斥。请 mw 与 app 就“是否允许破坏性变更”表态，并请 base 据此出 P1 v2 单一方案（替换或重载二选一），再表态。
+    [base] 提出新版本 v2：P1 v2 单一方案（二选一，采用「兼容新增」路线，放弃 int→string 破坏性替换）
+
+一、现状问题
+现有签名 void setX(int x); int getX(); 在超过 2^53 的场景经 JS/跨语言 JSON 传输会丢精度，int 字段本身也无法承载大整数；但直接把参数类型改成 string 会同时破坏既有调用方、已持久化数据和线上协议（当前协议无版本协商、无灰度字段），属于不可接受的破坏性变更。
+
+二、诉求
+1) 支持大整数（十进制字符串）写入与读回；2) 既有 setX(int)/getX() 的签名、语义、序列化字段、错误码完全不变；3) 新旧调用方可并存、按调用方灰度、可随时回滚。
+
+三、方案：保留 int 接口，新增具名字符串接口（不做同名重载，避免隐式转换歧义）
+
+接口签名（Java 示意，其他语言同构）：
+
+    public interface XService {
+        // 既有接口，语义与错误码完全不变
+        void setX(int x);
+        int getX();
+
+        // 新增：字符串入口/出口
+        void setXString(String x);   // 输入十进制整数字符串
+        String getXString();         // 输出规范十进制字符串
+    }
+
+内部状态：单一不可变对象，BigInteger 为唯一真值，int 仅作范围内缓存：
+
+    final class XState {
+        final BigInteger value;  // 唯一真值
+        final Integer asInt;     // 落在 int 范围时为缓存值，否则 null
+    }
+    private volatile XState state = new XState(BigInteger.ZERO, 0);
+
+流转：
+- setX(int x)：state = new XState(BigInteger.valueOf(x), x)；
+- setXString(String s)：先校验格式，再规范化（去前导零、-0→0），最后 state = new XState(v, v.bitLength() &lt; 32 ? v.intValue() : null)；
+- getX()：state.asInt != null 时返回 asInt，否则抛 E_RANGE（明确：字符串写入超出 int 后再调旧 getX 报 E_RANGE，绝不截断/溢出）；
+- getXString()：返回 state.value.toString()。
+
+输入输出边界（setXString）：
+- null、空串、&quot;+&quot;、&quot;-&quot; → E_FORMAT；
+- 含空白、下划线、小数点、科学计数、0x 前缀 → E_FORMAT（不 trim、不猜测）；
+- 不匹配 ^[+-]?[0-9]+$ → E_FORMAT；
+- &quot;0&quot;/&quot;-0&quot;/&quot;+0&quot;/&quot;000&quot; → 接受，规范化为 &quot;0&quot;；
+- &quot;00123&quot; → 接受，规范化为 &quot;123&quot;；
+- 去符号与前导零后的位数 &gt; MAX_DIGITS(4096，可配) → E_RANGE（防 DoS）；
+- 合法且在位数上限内 → 成功存储 BigInteger。
+getXString 输出恒为：无前导零、无 &quot;+&quot;、负数带 &quot;-&quot;、零为 &quot;0&quot;，不返回 null。
+
+协议/序列化（若 X 走 JSON 或 RPC）：
+- 读请求最多出现一个字段：{&quot;x&quot;:123} 走旧路径，{&quot;xStr&quot;:&quot;12345678901234567890&quot;} 走新路径；两字段同时出现且数值不一致 → E_CONFLICT，一致则接受；
+- 写响应：值在 int 范围时同时输出 x 与 xStr（旧客户端可读）；超出 int 时只输出 xStr、省略 x，旧客户端按既有「字段缺失」逻辑处理，绝不拿到错误值；
+- 不改变既有字段类型，不把超范围值塞进 x 字段。
+
+兼容与回滚：setX(int) 不校验 MAX_DIGITS（int 天然很小），异常类型、错误码、日志格式不变。新接口以新增方法/新增可选字段落地，服务端先上线读兼容；调用方按需切换 setXString；回滚仅需调用方改回 setX，无需数据迁移（值在 int 范围内可无损降级，超出范围时 setX 无法表达，由业务侧按 E_RANGE 处理）。
+
+测试要点（必须覆盖）：
+- int 路径回归：Integer.MIN_VALUE / MAX_VALUE / 0 / -1；
+- 数值边界：2^31-1、2^31、2^53、2^63、10^4096-1、10^4096；
+- 格式：null、空串、单独符号、前导零、空白、全角数字 → 对应 E_FORMAT；
+- 并发：setXString 与 getX/getXString 并发，读到的必须是完整旧值或完整新值（volatile 不可变对象保证）；
+- 协议：双字段冲突 → E_CONFLICT；超 int 时旧客户端收到缺失 x 而非错误值。
+
+表态：base 接受 mw 的兼容路线，正式撤回 v1 的「int 改 string」替换方案，v2 唯一采用「保留 int + 新增 setXString/getXString」。理由：在无协议版本协商的前提下，破坏性替换的迁移面与线上风险不可控；具名新增接口可同时满足大整数诉求与零破坏，并为后续再评估「是否废弃 int」保留空间（该议题不在本提案范围，需单独立项）。
+
+  —— 第 2 轮表态（并行盲投）——
+    [mw] → accept
+    [app] → accept
+
+    [chair] 判定 → agree：P1 v2 已获 base、mw、app 三方一致接受：撤回 v1 的破坏性替换，采用「保留 int + 新增 setXString/getXString」兼容路线。待办：服务端先行上线读兼容，再配合灰度；测试覆盖 int 回归、数值边界、格式错误、并发与双字段冲突。未决项：「是否废弃 int」单独立项，另议。
+    ✓ 提案 P1 达成
+
+────────────────────────────────────────────────────────────
+决议汇编
+  chair 决议：
+分工：base 按 P1 v2 实现兼容方案（保留 setX(int)/getX()，新增 setXString/getXString，并完成协议兼容与测试）；mw 保持旧 int 路径不变，新增字符串路径透传；app 按需接入 setXString/getXString，按字符串比较与透传。共识决议：P1 v2 已获 base、mw、app 三方一致同意，采用“保留 int + 新增字符串接口”的兼容路线，撤回 P1 v1 破坏性替换；服务端先上线读兼容，按调用方灰度、可随时回滚；测试覆盖 int 回归、数值边界、格式错误、并发及双字段冲突。未决项：是否废弃 int 接口，需单独立项另议。
+  会议状态 → agreed
+
+────────────────────────────────────────────────────────────
+决议 → 生成 issue
+  → I-001 指派给 base（决议来源）
+  → I-002 指派给 mw（决议来源）
+  → I-003 指派给 app（决议来源）
+
+======================================================================
+最终会议状态:
+  R-001 [agreed] 大整数接口变更协调
+    - 提案 P1 v2 [agreed]
+</pre>
+</section>
+
+<section class="card">
+  <h2>关键观察</h2>
+  <ul>
+    <li><b>并行盲投有效</b>：room 第 1 轮 base/mw/app 独立给出不同立场（base 提重载、mw 提可选字段、app 接受原案），未互相锚定。</li>
+    <li><b>chair 只引导不给方案</b>：chair 判定 continue 并归纳分歧点，由发起方 base 整合出 v2 兼容方案。</li>
+    <li><b>确定性兜底生效</b>：状态机强制"未全员接受不得判 agree"，杜绝模型假宣布共识（smoke 测试 5 实测拦截）。</li>
+    <li><b>决议 → issue</b>：room 达成后自动为每个参与方生成"决议来源" issue，与普通 issue 区分。</li>
+    <li><b>只可追加</b>：所有状态迁移走事件日志，非法迁移（closed 再评审、重复表态）被拒绝。</li>
+    <li><b>守则按角色分工生效</b>：修订方 mw 只提「问题 + 诉求 + 一句方向」，发起方 base 负责展开完整方案（API 签名/内部状态/边界/伪代码/测试集齐全），不再越俎代庖。</li>
+  </ul>
+  <div class="note">LLM 演示为真实 agent 输出（deepseek 驱动），非脚本；issue 场景约 1.5 分钟，room 场景约 1~2 分钟。</div>
+</section>
+
+<footer class="tag">agentmoot · docs/room-process.md · docs/implementation.md</footer>
+</div>
+<script>
+  if (window.mermaid) {
+    mermaid.initialize({ startOnLoad:true, theme:'dark', flowchart:{ useMaxWidth:true } });
+  }
+</script>
+</body>
+</html>

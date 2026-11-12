@@ -1,0 +1,10 @@
+1. issue 创建: I-001 open
+2. issue 迁移 open->accepted->resolved->closed = closed
+3. 非法迁移拦截: issue I-001 当前状态 closed，不能评审
+4. 发起人免表态拦截: base 是提案发起人，默认接受，无需表态
+5. 第1轮后全员接受? False
+6. 未全员接受判 agree 被拦截: 未全员接受，不能判 agree
+7. 第2轮(修订后)全员接受? True
+8. room 状态: agreed 提案: ['agreed']
+9. 重复/发起人表态去重: base 是提案发起人，默认接受，无需表态
+SMOKE ALL PASS

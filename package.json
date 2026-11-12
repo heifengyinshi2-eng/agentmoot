@@ -1,0 +1,48 @@
+{
+  "name": "@heifengyinshi2-eng/agentmoot",
+  "version": "0.1.0",
+  "description": "agentmoot — 跨项目 Agent 协同决策层（pi extension + Python MCP server）",
+  "keywords": [
+    "pi-package",
+    "moot",
+    "mcp",
+    "multi-agent",
+    "agent-coordination"
+  ],
+  "license": "MIT",
+  "type": "commonjs",
+  "pi": {
+    "extensions": [
+      "extensions/moot.ts"
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heifengyinshi2-eng/agentmoot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/heifengyinshi2-eng/agentmoot/issues"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "files": [
+    "README.md",
+    "LICENSE",
+    "extensions/moot.ts",
+    "moot/__init__.py",
+    "moot/store.py",
+    "moot/server.py",
+    "moot/cli.py",
+    "moot/client.py",
+    "moot/serve.py",
+    "moot/ui/index.html"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "release:pack": "node scripts/release/pack.mjs --pack",
+    "release:publish": "node scripts/release/pack.mjs && npm publish dist-release"
+  }
+}

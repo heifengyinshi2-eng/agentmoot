@@ -1,0 +1,9 @@
+{
+  "name": "app",
+  "version": "1.0.0",
+  "description": "订单站点",
+  "main": "app.js",
+  "dependencies": {
+    "middleware": "file:../middleware"
+  }
+}
