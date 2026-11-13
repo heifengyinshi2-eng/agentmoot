@@ -1,6 +1,6 @@
 {
   "name": "@heifengyinshi2-eng/agentmoot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "agentmoot — 跨项目 Agent 协同决策层（pi extension + Python MCP server）",
   "keywords": [
     "pi-package",
