@@ -47,3 +47,15 @@
 
 - 2026-11-12：建立计划；完成包结构、白名单打包、本地 npm pack 验证（11 文件）
 - 2026-11-12：发布完成。关键经验（来自 `agentcodemode/docs/14-release-playbook.md`）：① 带 `.github/workflows/*` 的 commit 用 HTTPS+PAT 推送会被拒（缺 workflow scope），改用 **SSH remote** 即可；② 本地 token 只需 read:packages，**write:packages 交给 CI 的 GITHUB_TOKEN**；③ `peerDependencies` 绝不要声明（会导致 pi install 拉整棵依赖树）；④ `.gitattributes` 强制 `eol=lf`。CI run 43219124558，6s 成功。
+
+## 0.2.0 — extension 改为无条件注入 + 项目级身份
+
+用户裁定：不要用环境变量提供身份。新设计：
+
+- **无条件注入**：不论有无身份，都注入 moot 是什么 / 何时用（issue、room、注册）/ 如何用 MCP。
+- **身份来自项目 cwd**：`<cwd>/.pi/moot.json` = `{project, token, server?}`，由 agent 调 `moot_register_project` 自主注册后写入。
+- **token 通道**：extension 读到 token 后设 `process.env.MOOT_TOKEN`；pi-mcp 每次元工具调用前 reload 配置并重新展开 `${env:...}`（`src/mcp-bridge.ts:95`），因此生效。同 session 内新注册需 `mcp_connect(server="moot", force=true)` 触发重连。
+- **MCP 配置自愈**：extension 幂等确保项目级 `.pi/mcp-servers.json` 有 moot 条目（缺失才追加）。
+- 安全性：`.pi/moot.json` 含 token，README 提示加入 `.gitignore`。
+
+验证：无 `.pi/moot.json` 时输出注册引导并自动生成 MCP 配置；有身份时 `moot_list_pending` 返回 `{"project":"base-lib",...}`。

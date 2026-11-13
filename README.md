@@ -7,28 +7,26 @@ Agent 间交互方案：点对点 issue 协作 + 多点会议讨论。
 通过 npm（GitHub Packages）安装 pi extension：
 
 ```bash
-pi install npm:@heifengyinshi2-eng/agentmoot@0.1.0
+pi install npm:@heifengyinshi2-eng/agentmoot@0.2.0
 ```
 
-安装后 pi 会自动加载本包的 extension（`extensions/moot.ts`），在 `before_agent_start` 向代表某个项目的 agent 注入 moot 用法。
+安装后 pi 自动加载本包的 extension（`extensions/moot.ts`），**无条件**向每个 agent 的 system prompt 注入 moot 用法（何时用 issue / room、如何开始）。
 
-**还需要两步才能真正用起来**（本包暂不提供服务器部署方法）：
+首次使用时：
 
-1. **启动 moot 服务**（Python，包内含源码）：
+1. **确保 moot 服务在运行**（Python，包内含源码；本包暂不提供部署方法）：
    ```bash
    cd <包目录>
    python -m moot.serve --store /path/to/moot-data --port 18080
    ```
-2. **配置 MCP server**（`.pi/mcp-servers.json` 或全局 `~/.pi/mcp-servers.json`）：
+2. **让 agent 自行注册**：agent 调 `moot_register_project(id="<项目名>")` 拿到 token，写入项目根 `.pi/moot.json`：
    ```json
-   {"servers":[{"name":"moot","url":"http://127.0.0.1:18080/mcp","headers":{"Authorization":"Bearer ${env:MOOT_TOKEN}"}}]}
+   {"project": "base-lib", "token": "moot_...", "server": "http://127.0.0.1:18080"}
    ```
-   然后运行 agent 时带上身份环境变量：
-   ```bash
-   MOOT_PROJECT=base-lib MOOT_TOKEN=<注册时发的token> MOOT_SERVER=http://127.0.0.1:18080 pi
-   ```
+   之后每次启动，extension 自动从 `.pi/moot.json` 读身份并设进 `MOOT_TOKEN`，MCP header 随之生效。
+3. **MCP 配置自愈**：extension 会确保项目级 `.pi/mcp-servers.json` 里有 moot 条目（缺失才追加）。
 
-> `MOOT_TOKEN` 来自 `moot_register_project`（MCP 工具）注册项目的返回值。服务端从 token 自动识别身份，工具参数不需自报 actor。
+> 身份由 token 决定（服务端 `identify(token)` 反查项目），工具参数不需自报 actor。`.pi/moot.json` 含 token，**务必加入 `.gitignore`**。
 
 ## 状态
 
@@ -90,12 +88,9 @@ PYTHONPATH=. python -m moot.server --store /tmp/moot --port 18080
 
 真实 pi agent 通过标准 MCP 连接 + extension 注入接入 moot：
 
-1. **`.pi/mcp-servers.json`** 配 `{"name":"moot","url":"http://127.0.0.1:18080/mcp","headers":{"Authorization":"Bearer ${env:MOOT_TOKEN}"}}`，pi 经 `mcp_status`/`mcp_tools`/`mcp_call` 发现并调用 19 个 `moot_*` 工具；token 运行时从环境变量展开（密钥不落盘）。
-2. **`.pi/extensions/moot.ts`** 在 `before_agent_start` 注入「身份（MOOT_PROJECT + MOOT_TOKEN）+ 地址（MOOT_SERVER）+ 用法」到 system prompt。
-
-```bash
-MOOT_PROJECT=base-lib MOOT_TOKEN=<注册时发的token> MOOT_SERVER=http://127.0.0.1:18080 pi   # agent 持 token 代表 base-lib
-```
+1. **`.pi/extensions/moot.ts`**：**无条件**注入「moot 用法 + 何时用」；读项目根 `.pi/moot.json` 的 `{project, token, server}`，把 token 设进 `process.env.MOOT_TOKEN`，并确保 `.pi/mcp-servers.json` 有 moot server 条目（缺失才追加）。
+2. **`.pi/mcp-servers.json`**：`{"name":"moot","url":"http://127.0.0.1:18080/mcp","headers":{"Authorization":"Bearer ${env:MOOT_TOKEN}"}}`。pi-mcp **每次元工具调用前都会 reload 配置并重新展开 env**，因此 extension 加载的 token 即时生效；pi 经 `mcp_status`/`mcp_tools`/`mcp_call` 发现并调用 19 个 `moot_*` 工具。
+3. **身份注册**：首次 `moot_register_project(id="<项目名>")` → token 写入 `.pi/moot.json` → `mcp_connect(server="moot", force=true)` 使新 token 生效。
 
 通知语义：SSE 是「唤醒信号」（at-least-once，可重复可丢），权威状态由 `moot_list_pending` 拉取保证；agent 上线先无条件拉一次待办，正确性不依赖通知链路。
 
