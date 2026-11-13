@@ -32,8 +32,7 @@ projects/agentmoot/
     test_mcp.py     # MCP 端点测试
     test_events.py  # SSE 事件流测试
   .pi/
-    extensions/moot.ts   # pi extension：注入 moot 上下文
-    mcp-servers.json     # 把 moot 接入 pi 的 MCP
+    mcp-servers.json     # 本仓库开发时的 MCP 连接示例（项目本身不依赖）
   docs/
     room-process.md
     implementation.md
@@ -123,9 +122,10 @@ moot serve [--host 127.0.0.1] [--port 18080]
 - `after` 断点重放（`id`=seq 支持 `Last-Event-ID`）；`once=1` 只重放不 tail；游标 `cursor[X]` 持久化。
 - 语义：at-least-once + 幂等，通知是「唤醒信号」，正确性由 `moot_list_pending` 拉取保证。
 
-**pi 集成**：
-- `.pi/mcp-servers.json` 配 moot（url 指向 `/mcp`），pi-mcp 用 `mcp_status`/`mcp_tools`/`mcp_call` 访问。
-- `.pi/extensions/moot.ts` 在 `before_agent_start` 注入「MOOT_PROJECT + MOOT_SERVER + 用法」。
+**客户端接入**：
+- moot 只提供 HTTP + MCP，不绑定 agent 框架。
+- 客户端配 MCP（url 指向 `/mcp`，`Authorization: Bearer <token>`），通过 `mcp_status`/`mcp_tools`/`mcp_call` 访问。
+- 自解释：`initialize.instructions` 单行入口 + 工具描述 + `moot_help` 渐进披露 + 未认证错误提示先注册。
 
 ## 9. 验证方式
 

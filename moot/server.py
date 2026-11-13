@@ -180,6 +180,7 @@ class MootHandler(BaseHTTPRequestHandler):
                     "protocolVersion": "2025-06-18",
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "moot", "version": "0.1"},
+                    "instructions": MCP_INSTRUCTIONS,
                 })
             elif method == "notifications/initialized":
                 self.send_response(202)
@@ -249,28 +250,28 @@ class MootHandler(BaseHTTPRequestHandler):
                 r = list(s.state["rooms"].values())
             elif name == "moot_get_room":
                 if not actor:
-                    raise StoreError("moot_get_room 需要项目身份（Authorization: Bearer <token>）")
+                    raise StoreError("moot_get_room 需要项目身份。先调 moot_register_project(id=...) 注册拿 token，再由客户端在 Authorization: Bearer 中携带")
                 r = s.room_view(args["id"], actor)
             elif name == "moot_get_room_full":
                 self._require_chair(s, args["id"], actor)
                 r = s._room(args["id"])
             elif name == "moot_submit":
                 if not actor:
-                    raise StoreError("moot_submit 需要项目身份（Authorization: Bearer <token>）")
+                    raise StoreError("moot_submit 需要项目身份。先调 moot_register_project(id=...) 注册拿 token，再由客户端在 Authorization: Bearer 中携带")
                 r = s.submit(args["room"], args["proposal"], actor, args["action"], args.get("body", ""))
             elif name == "moot_judge":
                 self._require_chair(s, args["room"], actor)
                 r = s.judge(args["room"], args["proposal"], args["verdict"], args.get("guidance", ""))
             elif name == "moot_revise":
                 if not actor:
-                    raise StoreError("moot_revise 需要项目身份（发起方 token）")
+                    raise StoreError("moot_revise 需要项目身份（发起方 token）。先调 moot_register_project(id=...) 注册拿 token，再由客户端在 Authorization: Bearer 中携带")
                 r = s.revise(args["room"], args["proposal"], args["new_body"], author=actor)
             elif name == "moot_finalize":
                 self._require_chair(s, args["room"], actor)
                 r = s.finalize(args["room"], args.get("resolution", ""))
             elif name == "moot_list_pending":
                 if not actor:
-                    raise StoreError("moot_list_pending 需要项目身份（Authorization: Bearer <token>）")
+                    raise StoreError("moot_list_pending 需要项目身份。先调 moot_register_project(id=...) 注册拿 token，再由客户端在 Authorization: Bearer 中携带")
                 r = s.list_pending(actor)
             else:
                 raise StoreError(f"未知工具: {name}")
@@ -459,6 +460,11 @@ def _moot_help(topic=None, all_=False):
         raise StoreError(f"未知 help 主题: {t}（可选: {', '.join(HELP_TOPICS)}）")
     return HELP_TOPICS[t]
 
+
+MCP_INSTRUCTIONS = (
+    "moot 跨项目协作服务：首次使用先调 moot_register_project 注册并保存返回的 token；"
+    "issue 用于点对点请求，room 用于多方决策；协议详见 moot_help。"
+)
 
 MCP_TOOLS = [
     _mt("moot_help", "系统帮助：无参数返回概要；topic 指定主题渐进披露；all=true 一次全量",

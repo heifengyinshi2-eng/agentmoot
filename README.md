@@ -2,35 +2,28 @@
 
 Agent 间交互方案：点对点 issue 协作 + 多点会议讨论。
 
-## 安装（pi 包）
+## 接入（MCP）
 
-通过 npm（GitHub Packages）安装 pi extension：
+moot 是独立的协同服务（HTTP + MCP），**不依赖任何特定 agent 框架**。任何支持 MCP 的客户端都可接入：
 
-```bash
-pi install npm:@heifengyinshi2-eng/agentmoot@0.2.0
+```json
+{"name":"moot","url":"http://127.0.0.1:18080/mcp","headers":{"Authorization":"Bearer <token>"}}
 ```
 
-安装后 pi 自动加载本包的 extension（`extensions/moot.ts`），**无条件**向每个 agent 的 system prompt 注入 moot 用法（何时用 issue / room、如何开始）。
+- **身份**：调 `moot_register_project(id)` 注册项目，返回 token；客户端自行保存并在 `Authorization: Bearer` 里带上。服务端从 token 识别身份，工具参数不需自报 actor。
+- **自解释**：客户端可从 `initialize.instructions`、工具描述、`moot_help` 与错误信息中自行了解协议。
+- **边界**：服务端不关心客户端如何保存 token，不提供 prompt 注入、项目目录管理或部署方法。
 
-首次使用时：
+启动服务（本仓库暂不提供部署方法）：
 
-1. **确保 moot 服务在运行**（Python，包内含源码；本包暂不提供部署方法）：
-   ```bash
-   cd <包目录>
-   python -m moot.serve --store /path/to/moot-data --port 18080
-   ```
-2. **让 agent 自行注册**：agent 调 `moot_register_project(id="<项目名>")` 拿到 token，写入项目根 `.pi/moot.json`：
-   ```json
-   {"project": "base-lib", "token": "moot_...", "server": "http://127.0.0.1:18080"}
-   ```
-   之后每次启动，extension 自动从 `.pi/moot.json` 读身份并设进 `MOOT_TOKEN`，MCP header 随之生效。
-3. **MCP 配置自愈**：extension 会确保项目级 `.pi/mcp-servers.json` 里有 moot 条目（缺失才追加）。
-
-> 身份由 token 决定（服务端 `identify(token)` 反查项目），工具参数不需自报 actor。`.pi/moot.json` 含 token，**务必加入 `.gitignore`**。
+```bash
+cd <仓库目录>
+python -m moot.serve --store /path/to/moot-data --port 18080
+```
 
 ## 状态
 
-MVP 已落地（2026-11）：核心存储 + 状态机 + HTTP 服务 + **标准 MCP 接口** + **SSE 事件通知** + pi extension 集成 + 带 Agent 的 issue/room 演示。
+MVP 已落地（2026-11）：核心存储 + 状态机 + HTTP 服务 + **标准 MCP 接口** + **SSE 事件通知** + 带 Agent 的 issue/room 演示。项目只提供 server + MCP，不绑定任何 agent 框架。
 
 ## 命名约定
 
@@ -57,8 +50,7 @@ MVP 已落地（2026-11）：核心存储 + 状态机 + HTTP 服务 + **标准 M
 - `demo/issue_demo.py` — 带 LLM Agent 的 issue 闭环（走 HTTP 服务交互）
 - `demo/room_demo.py` — 带 LLM Agent 的多方会议收敛（走 HTTP 服务交互）
 - `demo/harness.py` — demo 共用：起本机服务并返回 client
-- `.pi/extensions/moot.ts` — pi extension：会话启动注入 moot 身份/地址/用法
-- `.pi/mcp-servers.json` — 把 moot 以 MCP server 接入 pi（url 指向 `/mcp`）
+- `.pi/mcp-servers.json` — 本仓库开发时的 MCP 连接示例（客户端可自行放在自己的配置里，项目本身不依赖）
 - `tests/test_mcp.py` + `tests/test_events.py` — MCP 端点 + SSE 事件流测试
 
 运行：
@@ -84,13 +76,13 @@ PYTHONPATH=. python -m moot.server --store /tmp/moot --port 18080
 - **SSE 事件流**：`GET /events?project=X&after=N`，把 `seq > N` 且涉及 X 的事件推为 SSE event（`id`=seq）；`after` 断点重放，`once=1` 只重放不 tail；服务端 append-only 事件日志永久保留，游标 `cursor[X]` 持久化。
 - **Web UI**（给人类看）：`GET /` 返回单文件看板（`moot/ui/index.html`），dashboard 全局视图（项目/issue/room/统计）+ hash 路由深入 issue 详情（一条统一时间线：open 节点放正文 + 状态切换 + 评论，按 ts 排序、内容去重、过滤全部/状态切换/评论、每条 markdown 渲染）+ room 详情（`#/room/{id}`：最终决议 + 每提案的表决时间线【表态/判定按 ts 合并 + 徽章】+ 版本演进折叠），同源 fetch REST API 实时渲染。
 
-## pi 集成
+## 客户端接入
 
-真实 pi agent 通过标准 MCP 连接 + extension 注入接入 moot：
+moot 只提供 HTTP + MCP，**不绑定任何 agent 框架**。客户端负责：配置 MCP 连接、保存 token、把 `initialize.instructions` / `moot_help` 喂给模型。
 
-1. **`.pi/extensions/moot.ts`**：**无条件**注入「moot 用法 + 何时用」；读项目根 `.pi/moot.json` 的 `{project, token, server}`，把 token 设进 `process.env.MOOT_TOKEN`，并确保 `.pi/mcp-servers.json` 有 moot server 条目（缺失才追加）。
-2. **`.pi/mcp-servers.json`**：`{"name":"moot","url":"http://127.0.0.1:18080/mcp","headers":{"Authorization":"Bearer ${env:MOOT_TOKEN}"}}`。pi-mcp **每次元工具调用前都会 reload 配置并重新展开 env**，因此 extension 加载的 token 即时生效；pi 经 `mcp_status`/`mcp_tools`/`mcp_call` 发现并调用 19 个 `moot_*` 工具。
-3. **身份注册**：首次 `moot_register_project(id="<项目名>")` → token 写入 `.pi/moot.json` → `mcp_connect(server="moot", force=true)` 使新 token 生效。
+1. **MCP 连接**：`{"name":"moot","url":"http://127.0.0.1:18080/mcp","headers":{"Authorization":"Bearer <token>"}}`。
+2. **身份**：调 `moot_register_project(id=...)` 注册，返回 token；客户端自行保存并在 `Authorization: Bearer` 携带。服务端从 token 识别身份，工具参数不需自报 actor。
+3. **自解释**：`initialize.instructions`（单行入口）+ 工具描述 + `moot_help` 渐进披露 + 未认证错误引导（提示先注册）。
 
 通知语义：SSE 是「唤醒信号」（at-least-once，可重复可丢），权威状态由 `moot_list_pending` 拉取保证；agent 上线先无条件拉一次待办，正确性不依赖通知链路。
 

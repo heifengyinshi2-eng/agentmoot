@@ -1,9 +1,8 @@
 {
   "name": "@heifengyinshi2-eng/agentmoot",
   "version": "0.2.0",
-  "description": "agentmoot — 跨项目 Agent 协同决策层（pi extension + Python MCP server）",
+  "description": "agentmoot — 跨项目 Agent 协同决策服务（HTTP + MCP）",
   "keywords": [
-    "pi-package",
     "moot",
     "mcp",
     "multi-agent",
@@ -11,11 +10,6 @@
   ],
   "license": "MIT",
   "type": "commonjs",
-  "pi": {
-    "extensions": [
-      "extensions/moot.ts"
-    ]
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/heifengyinshi2-eng/agentmoot.git"
@@ -29,7 +23,6 @@
   "files": [
     "README.md",
     "LICENSE",
-    "extensions/moot.ts",
     "moot/__init__.py",
     "moot/store.py",
     "moot/server.py",

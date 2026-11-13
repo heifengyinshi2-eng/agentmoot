@@ -62,6 +62,12 @@ class TestMCP(unittest.TestCase):
         self.assertEqual(r["result"]["protocolVersion"], "2025-06-18")
         self.assertIn("tools", r["result"]["capabilities"])
         self.assertEqual(r["result"]["serverInfo"]["name"], "moot")
+        # MCP 自解释入口：最小化单行 instructions
+        ins = r["result"].get("instructions")
+        self.assertTrue(ins and isinstance(ins, str))
+        self.assertNotIn("\n", ins)
+        self.assertIn("moot_register_project", ins)
+        self.assertIn("moot_help", ins)
 
     def test_tools_list(self):
         r = rpc(self.base, "tools/list", {})
@@ -77,9 +83,10 @@ class TestMCP(unittest.TestCase):
         tok = register(self.base, "tok_app")
         self.assertTrue(tok.startswith("moot_"))
         register(self.base, "tok_base")
-        # 无 token 调 list_pending → 报错
+        # 无 token 调 list_pending → 报错，且错误信息引导去注册
         r = call(self.base, "moot_list_pending", {})
         self.assertTrue(r["isError"])
+        self.assertIn("moot_register_project", r["content"][0]["text"])
         # 带 token → 识别身份
         r = call(self.base, "moot_list_pending", {}, token=tok)
         self.assertFalse(r["isError"])
