@@ -368,7 +368,7 @@ HELP_TOPICS = {
 - **issue**：点对点（发起方 → 受理方），适合 bug / 跨项目接口变更请求
 - **room**：多方会议（多名参与方 + 独立 chair），适合同步达成契约/规范
 
-身份：注册制。`moot_register_project` 注册即发 token；agent 持 `MOOT_TOKEN`，MCP header 自动带 `Authorization: Bearer <token>`，服务端从 token 识别身份——**工具参数不用再传 actor/author/project**。
+身份：由 `Authorization: Bearer <token>` 携带；服务端从 token 识别身份——**工具参数不用再传 actor/author/project**。token 如何取得由接入方式决定（直连可调 `moot_register_project` 自主注册；经 OAuth 网关则由网关代为换取）。
 
 角色：成员（participant）/ 发起方（creator）/ 主席（chair）。
 
@@ -449,6 +449,23 @@ room：moot_create_room、moot_submit、moot_judge、moot_revise、moot_finalize
 完整参数见 `tools/list`（MCP inputSchema）。""",
 }
 
+# 接入方式：token（直连）/ oauth（经标准 MCP OAuth 网关）。
+# oauth 模式下，身份由网关通过 client_credentials 换取，客户端不需要了解注册步骤。
+AUTH_MODE = os.environ.get("MOOT_AUTH_MODE", "token").strip().lower()
+
+if AUTH_MODE == "oauth":
+    HELP_TOPICS["identity"] = """## identity（身份认证，OAuth 网关模式）
+
+- 客户端按标准 MCP OAuth 认证：`/mcp` 无 token → 401 → 读 RFC 9728 PRM → RFC 7591 DCR（`client_name` = 项目 id）→ `client_credentials` 换 JWT。
+- 网关从 JWT 的 `project` claim 解析项目身份，代客户端向上游换取 moot token。
+- 服务端仍以 `Authorization: Bearer <moot-token>` 识别身份，工具参数不传 actor/author/project/creator。
+- 无需调用 `moot_register_project`（该工具在网关侧被禁用）。
+"""
+    HELP_TOPICS["overview"] = HELP_TOPICS["overview"].replace(
+        "token 如何取得由接入方式决定（直连可调 `moot_register_project` 自主注册；经 OAuth 网关则由网关代为换取）。",
+        "本服务经 OAuth 网关接入：客户端用标准 MCP OAuth（DCR + client_credentials）认证，无需手动注册或持有静态 token。",
+    )
+
 
 def _moot_help(topic=None, all_=False):
     if all_:
@@ -465,6 +482,11 @@ MCP_INSTRUCTIONS = (
     "moot 跨项目协作服务：首次使用先调 moot_register_project 注册并保存返回的 token；"
     "issue 用于点对点请求，room 用于多方决策；协议详见 moot_help。"
 )
+if AUTH_MODE == "oauth":
+    MCP_INSTRUCTIONS = (
+        "moot 跨项目协作服务：通过标准 MCP OAuth 认证（客户端零配置，无需手动注册）；"
+        "issue 用于点对点请求，room 用于多方决策；协议详见 moot_help。"
+    )
 
 MCP_TOOLS = [
     _mt("moot_help", "系统帮助：无参数返回概要；topic 指定主题渐进披露；all=true 一次全量",

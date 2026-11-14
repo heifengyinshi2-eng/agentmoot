@@ -7,6 +7,7 @@
  *   everything else                        -> oidc-provider (RFC 8414/7591/6749)
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type Provider from "oidc-provider";
 import type { GatewayConfig } from "./config.ts";
@@ -117,7 +118,27 @@ export function createGatewayHttpServer(deps: HttpDeps) {
 	const { cfg, provider } = deps;
 	const oauthCallback = provider.callback();
 
+	/** 结构化日志：每行一个 JSON，便于采集（stdout）。 */
+	const log = (entry: Record<string, unknown>) => {
+		console.log(JSON.stringify({ ts: new Date().toISOString(), service: "moot-gateway", ...entry }));
+	};
+
 	return createServer((req, res) => {
+		const startedAt = Date.now();
+		const requestId = randomUUID();
+		res.setHeader("x-request-id", requestId);
+		res.on("finish", () => {
+			const status = res.statusCode;
+			log({
+				level: status >= 500 ? "error" : status >= 400 ? "warn" : "info",
+				requestId,
+				method: req.method,
+				path: req.url,
+				status,
+				durationMs: Date.now() - startedAt,
+			});
+		});
+
 		void (async () => {
 			const url = new URL(req.url ?? "/", cfg.origin);
 
@@ -156,8 +177,13 @@ export function createGatewayHttpServer(deps: HttpDeps) {
 			oauthCallback(req, res);
 		})().catch((err) => {
 			if (!res.headersSent) {
-				sendJson(res, 500, { error: "server_error", error_description: err instanceof Error ? err.message : String(err) });
+				sendJson(res, 500, {
+					error: "server_error",
+					error_description: err instanceof Error ? err.message : String(err),
+					request_id: requestId,
+				});
 			}
+			log({ level: "error", requestId, event: "unhandled", message: err instanceof Error ? err.stack ?? err.message : String(err) });
 		});
 	});
 }

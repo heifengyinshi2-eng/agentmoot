@@ -187,12 +187,12 @@ DCR 的 `client_name` → JWT `project` claim → 网关向上游解析 token：
 
 ## 8. 已知限制 / 后续 TODO
 
-1. **内存 adapter**：oidc-provider 重启后丢失 DCR 客户端。pi-mcp 会在 `invalid_client` 时自动重新注册，功能可恢复；但严格场景应接入持久化 adapter（SQLite/Redis）。
-2. **开放 DCR**：不设 `MOOT_INITIAL_ACCESS_TOKEN` 时，本机任意进程可用任意 `client_name` 冒充项目。**对外暴露前必须设置该变量**，并考虑按项目签发 initial token。
-3. **`moot_help` 文案**：上游帮助仍提到 `moot_register_project`；调用会被网关拒绝并提示。彻底解决需 moot 支持按认证方式裁剪帮助文本（或网关改写，但会引入业务耦合）。
-4. **重复凭据路径**：静态 `moot_` token（直连 18080）与 OAuth（经 18081）并存。长期可考虑让网关成为唯一入口，moot 只信任网关。
-5. **可观测性**：目前只有 `/health` 和启动日志；生产化需要结构化日志、请求 ID、token 使用指标。
-6. **未提交 git**：迁移后的改动都在工作区，`git status` 可见。按项目约定，提交信息需带 `[plan: mcp-oauth-gateway]`。
+1. ✅ **内存 adapter → 文件 adapter**（2026-11-14）：新增 `gateway/src/adapter.ts`，记录存 `<stateDir>/adapter/<type>-<sha256(id)>.json`。已验证 DCR 注册后重启网关，原 client_id/secret 仍可换 token。多实例共享需换 Redis/SQLite（当前文件实现适合单机；多实例下文件不共享）。
+2. ✅ **开放 DCR → 可选 initial access token**：`MOOT_INITIAL_ACCESS_TOKEN` 已实现并验证——无 token DCR 返回 401，带 `Authorization: Bearer <token>` 返回 201。**对外暴露前必须设置**。
+3. ✅ **`moot_help` 文案按认证方式裁剪**：moot 新增 `MOOT_AUTH_MODE=oauth`（默认 `token`）。oauth 模式下 `identity` 主题与 `overview` 身份行改为 OAuth 说明，`initialize.instructions` 也不再提 `moot_register_project`。已验证。
+4. ⏳ **重复凭据路径**：静态 `moot_` token（直连 18080）与 OAuth（经 18081）并存。长期可让网关成为唯一入口，moot 只信任网关——**留待架构调整讨论**。
+5. ✅ **可观测性**：网关每个请求生成 request id（响应头 `x-request-id`），stdout 输出一行结构化 JSON（`ts/service/level/requestId/method/path/status/durationMs`）；未处理异常额外记录 `event:"unhandled"` + stack。
+6. ✅ **已提交 git**：`b45bfd4`（网关整体）；后续 TODO 改动随下一次提交。
 
 ## 9. 部署建议
 

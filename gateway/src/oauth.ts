@@ -14,6 +14,7 @@
  * It is copied into the access token as the `project` claim. The upstream
  * adapter uses that claim to obtain the project-scoped upstream token.
  */
+import { createFileAdapter } from "./adapter.ts";
 import { randomBytes } from "node:crypto";
 import Provider from "oidc-provider";
 import { createLocalJWKSet, jwtVerify, type JWTVerifyGetKey, type JWTPayload } from "jose";
@@ -46,6 +47,8 @@ export function protectedResourceMetadataUrl(cfg: GatewayConfig): string {
 
 export function createOAuthProvider(cfg: GatewayConfig, jwks: Jwks): Provider {
 	const provider = new Provider(cfg.issuer.href, {
+		// 持久化 adapter：重启不丢 DCR 客户端（默认内存 adapter 会丢）。
+		adapter: createFileAdapter(cfg.stateDir),
 		jwks,
 		clients: cfg.oauth.clients.map((c) => ({
 			client_id: c.client_id,
