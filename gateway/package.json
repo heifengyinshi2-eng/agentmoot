@@ -1,0 +1,37 @@
+{
+  "name": "@heifengyinshi2-eng/moot-gateway",
+  "version": "0.1.0",
+  "description": "moot OAuth 网关：标准 MCP + OAuth 2.1（DCR / client_credentials），moot 作为上游应用接口",
+  "type": "module",
+  "main": "src/index.ts",
+  "files": [
+    "README.md",
+    "src",
+    "moot-gateway.example.json"
+  ],
+  "scripts": {
+    "start": "node src/index.ts",
+    "dev": "node --watch src/index.ts",
+    "test": "node --test \"tests/*.test.ts\"",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "jose": "^6.2.17",
+    "oidc-provider": "^9.15.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heifengyinshi2-eng/agentmoot.git",
+    "directory": "gateway"
+  }
+}

@@ -92,6 +92,21 @@ moot 只提供 HTTP + MCP，**不绑定任何 agent 框架**。客户端负责�
 
 改过 mermaid 图后务必校验语法：`python tools/check_mermaid.py`（首次需 `cd tools/.mmd-check && npm install mermaid jsdom`）。
 
+## OAuth 网关（可选组件）
+
+`gateway/` 是一个标准 MCP 认证网关：客户端用 OAuth 2.1（DCR + `client_credentials`）自动认证，网关再以项目身份转发到 moot 的 `/mcp`。moot 本体保持零依赖 Python，网关是独立 Node 进程，二者解耦。
+
+```bash
+cd gateway && npm install && npm start     # 默认 127.0.0.1:18081，上游 127.0.0.1:18080/mcp
+```
+
+- 端点：RFC 9728 PRM、RFC 8414 AS metadata、RFC 7591 DCR（`/reg`）、`/token`、`/jwks`、`/mcp`。
+- 客户端零配置：DCR 的 `client_name` 即项目 id；`/mcp` 无 token 返回 401 + `WWW-Authenticate`，客户端自动发现并注册。
+- 默认禁用 `moot_register_project`（身份由 OAuth 提供），并递归脱敏上游结果中的 token 字段。
+- 开放 DCR 仅适合本机；对外部署必须设置 `MOOT_INITIAL_ACCESS_TOKEN`。
+
+详见 [`gateway/README.md`](gateway/README.md) 与 [`docs/oauth-gateway-handover.md`](docs/oauth-gateway-handover.md)。
+
 ## 本机部署（开机自启服务）
 
 moot 作为本机常驻服务：数据在 `%LOCALAPPDATA%\moot`，开机登录自启，崩溃自动重启，**无控制台窗口、进程名为 `moot.exe`**。

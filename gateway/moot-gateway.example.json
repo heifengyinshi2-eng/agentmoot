@@ -1,0 +1,20 @@
+{
+  "host": "127.0.0.1",
+  "port": 18081,
+  "mcpPath": "/mcp",
+  "issuer": "http://127.0.0.1:18081",
+  "mcpResource": "http://127.0.0.1:18081/mcp",
+  "upstream": {
+    "name": "moot",
+    "url": "http://127.0.0.1:18080/mcp",
+    "projectsUrl": "http://127.0.0.1:18080/projects"
+  },
+  "oauth": {
+    "accessTokenTtl": 3600,
+    "scopes": ["mcp"],
+    "initialAccessToken": "",
+    "clients": []
+  },
+  "denyTools": ["moot_register_project"],
+  "stateDir": ".moot-gateway"
+}

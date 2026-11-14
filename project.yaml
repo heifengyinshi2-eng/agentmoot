@@ -1,0 +1,11 @@
+schema: 1
+id: agentmoot
+name: agentmoot
+summary: "Agent 间交互方案：点对点 issue 协作 + 多点会议讨论。"
+repo: "git@github.com:heifengyinshi2-eng/agentmoot.git"
+refs:
+  - README.md
+  - AGENTS.md
+  - docs/
+  - plans/
+mcp: []

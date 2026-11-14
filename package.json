@@ -36,6 +36,9 @@
   },
   "scripts": {
     "release:pack": "node scripts/release/pack.mjs --pack",
-    "release:publish": "node scripts/release/pack.mjs && npm publish dist-release"
+    "release:publish": "node scripts/release/pack.mjs && npm publish dist-release",
+    "gateway:start": "npm --prefix gateway start",
+    "gateway:test": "npm --prefix gateway test",
+    "gateway:typecheck": "npm --prefix gateway run typecheck"
   }
 }

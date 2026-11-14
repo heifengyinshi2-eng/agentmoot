@@ -18,3 +18,16 @@ package-lock.json
 # 本机部署二进制（由部署脚本生成，不入库）
 bin/moot.exe
 bin/*.dll
+
+# OAuth 网关运行时状态
+gateway/.moot-gateway/
+
+# project-store: recommended ignores
+.env
+.env.*
+!.env.example
+*.log
+logs/
+.DS_Store
+Thumbs.db
+.moot.json
