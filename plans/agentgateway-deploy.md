@@ -43,9 +43,11 @@
 - APISIX `up-apisix` 在容器已运行时不会重启，改路由后必须显式
   `podman restart agw-apisix`。
 
-## 后续（未做）
+## 后续
 
-- [ ] 独立 `apisix-moot` client + `AGW_PROOF_SECRET_MOOT`
-- [ ] 给所有 agent client 增加 moot audience mapper
-- [ ] 人类独立登录入口 / Web UI 认证
+- [x] 独立 `apisix-moot` client + `AGW_PROOF_SECRET_MOOT`
+- [x] 给 `agent-alpha` / `agent-beta` 增加 `moot-audience` mapper（二者实测 200）
+- [x] 人类独立登录（`apisix-moot` standard flow，回调 `/svc/moot/oauth2/callback`）
+- [ ] Web UI 认证（当前仅端口直连、只读）
 - [ ] 不发布端口（正式私网形态）
+- [ ] agentgateway 仓库三处改动提交
