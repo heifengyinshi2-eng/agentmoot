@@ -14,6 +14,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 from .store import EVENT_LOG, Store, StoreError, notify_targets
+from . import gateway_identity
+
+# 接入方式：token（直连，默认）/ oauth（MCP OAuth 网关）/ gateway（APISIX 可信身份头）
+AUTH_MODE = os.environ.get("MOOT_AUTH_MODE", "token").strip().lower()
+GATEWAY_CFG = gateway_identity.GatewayConfig.from_env()
 
 
 class MootHandler(BaseHTTPRequestHandler):
@@ -59,6 +64,9 @@ class MootHandler(BaseHTTPRequestHandler):
         if parts and parts[0] == "mcp":
             self._handle_mcp()
             return
+        if parts == ["whoami"] and self.command == "GET":
+            self._send(200, self._whoami())
+            return
         if parts and parts[0] == "events" and self.command == "GET":
             self._handle_events()
             return
@@ -84,11 +92,16 @@ class MootHandler(BaseHTTPRequestHandler):
         if not parts or parts == ["health"]:
             return {"ok": True, "service": "moot", "projects": len(s.list_projects())}
 
+        # 网关模式下身份只能来自 IdP：REST 写入（含自报 creator/author）一律关闭，
+        # 写操作走 MCP，由 APISIX 注入并签名的身份头驱动。
+        if AUTH_MODE == "gateway" and method == "POST":
+            raise StoreError("网关模式下 REST 写入已禁用：请通过 MCP 调用（身份由 APISIX 注入）")
+
         head = parts[0]
 
         if head == "projects":
             if method == "GET":
-                return {"projects": s.list_projects()}
+                return {"projects": _project_list(s)}
             if method == "POST":
                 return s.register_project(body["id"], body.get("name"), body.get("superior", "human"))
 
@@ -209,6 +222,47 @@ class MootHandler(BaseHTTPRequestHandler):
             return auth[len("Bearer "):].strip()
         return None
 
+    def _whoami(self):
+        """诊断端点：返回网关身份解析结果（不回显 token / proof 值）。"""
+        gw = self._gateway_identity()
+        return {
+            "auth_mode": AUTH_MODE,
+            "gateway_app": GATEWAY_CFG.app if GATEWAY_CFG.enabled() else None,
+            "has_proof": bool(self.headers.get("X-AGW-Proof")),
+            "has_userinfo": bool(self.headers.get("X-Userinfo")),
+            "has_access_token": bool(self.headers.get("X-Access-Token")),
+            "principal_id": self.headers.get("X-Principal-Id"),
+            "identified": gw is not None,
+            "actor": gw,
+        }
+
+    def _gateway_identity(self):
+        """仅 gateway 模式下解析 APISIX 可信头；其它模式返回 None。"""
+        if AUTH_MODE != "gateway":
+            return None
+        return gateway_identity.identity(self.headers, GATEWAY_CFG)
+
+    def _actor_context(self, token=None):
+        """返回 (actor, kind)。
+
+        - gateway 模式：身份来自 APISIX 可信头；agent 首次出现时自动登记为项目，
+          人类不入项目（观察者，可读全量）。
+        - 其它模式：token → project id。
+        """
+        gw = self._gateway_identity()
+        if gw:
+            principal = gw["principal"]
+            if gw["kind"] == "agent":
+                s = self.store
+                if principal not in s.state["projects"]:
+                    with self.lock:
+                        if principal not in s.state["projects"]:
+                            s.register_project(principal, principal, gw.get("owner") or "human")
+                return principal, "agent"
+            return principal, "human"
+        pid = self.store.identify(token)
+        return pid, ("agent" if pid else None)
+
     def _require_chair(self, s, rid, actor):
         """校验 actor 是否为该 room 的 chair。"""
         room = s._room(rid)
@@ -217,16 +271,20 @@ class MootHandler(BaseHTTPRequestHandler):
 
     def _mcp_call_tool(self, name, args, token=None):
         s = self.store
-        actor = s.identify(token)  # 身份由 token 保证，不信任调用方自报
+        actor, actor_kind = self._actor_context(token)  # 身份由 token/网关保证，不信任调用方自报
+        # 人类观察者不入项目：查看 room 时返回全量（不做盲投屏蔽）
+        viewer = actor if actor_kind == "agent" else None
         try:
             with open("/tmp/moot-tool-calls.log", "a", encoding="utf-8") as _f:
-                _f.write(json.dumps({"name": name, "actor": actor, "args": args}, ensure_ascii=False) + "\n")
+                _f.write(json.dumps({"name": name, "actor": actor, "kind": actor_kind, "args": args}, ensure_ascii=False) + "\n")
             if name == "moot_help":
                 r = _moot_help(args.get("topic"), bool(args.get("all")))
             elif name == "moot_register_project":
+                if AUTH_MODE == "gateway":
+                    raise StoreError("网关模式下身份由 IdP 提供，不能自注册；请用 Keycloak 身份访问")
                 r = s.register_project(args["id"], args.get("name"), args.get("superior", "human"))
             elif name == "moot_list_projects":
-                r = s.list_projects()
+                r = _project_list(s)
             elif name == "moot_create_issue":
                 r = s.create_issue(args["assignee"], args["title"], args["body"], actor or "human")
             elif name == "moot_list_issues":
@@ -250,21 +308,21 @@ class MootHandler(BaseHTTPRequestHandler):
                 r = list(s.state["rooms"].values())
             elif name == "moot_get_room":
                 if not actor:
-                    raise StoreError("moot_get_room 需要项目身份。先调 moot_register_project(id=...) 注册拿 token，再由客户端在 Authorization: Bearer 中携带")
-                r = s.room_view(args["id"], actor)
+                    raise StoreError("moot_get_room 需要身份：直连模式先在 Authorization: Bearer 携带项目 token；网关模式需经 APISIX 认证")
+                r = s.room_view(args["id"], viewer)
             elif name == "moot_get_room_full":
                 self._require_chair(s, args["id"], actor)
                 r = s._room(args["id"])
             elif name == "moot_submit":
                 if not actor:
-                    raise StoreError("moot_submit 需要项目身份。先调 moot_register_project(id=...) 注册拿 token，再由客户端在 Authorization: Bearer 中携带")
+                    raise StoreError("moot_submit 需要身份：直连模式先在 Authorization: Bearer 携带项目 token；网关模式需经 APISIX 认证")
                 r = s.submit(args["room"], args["proposal"], actor, args["action"], args.get("body", ""))
             elif name == "moot_judge":
                 self._require_chair(s, args["room"], actor)
                 r = s.judge(args["room"], args["proposal"], args["verdict"], args.get("guidance", ""))
             elif name == "moot_revise":
                 if not actor:
-                    raise StoreError("moot_revise 需要项目身份（发起方 token）。先调 moot_register_project(id=...) 注册拿 token，再由客户端在 Authorization: Bearer 中携带")
+                    raise StoreError("moot_revise 需要身份（提案发起方）：直连模式先在 Authorization: Bearer 携带项目 token；网关模式需经 APISIX 认证")
                 r = s.revise(args["room"], args["proposal"], args["new_body"], author=actor)
             elif name == "moot_finalize":
                 self._require_chair(s, args["room"], actor)
@@ -304,6 +362,10 @@ class MootHandler(BaseHTTPRequestHandler):
                 k, v = kv.split("=", 1)
                 params[k] = v
         project = params.get("project", "")
+        gw = self._gateway_identity()
+        if gw:
+            # 网关模式身份可信：agent 只能订阅自己的事件；人类观察者接收全量
+            project = gw["principal"] if gw["kind"] == "agent" else ""
         once = params.get("once") == "1"
         try:
             after = int(params.get("after", self.store.get_cursor(project)))
@@ -326,7 +388,7 @@ class MootHandler(BaseHTTPRequestHandler):
                 if ev["seq"] <= last_seq:
                     continue
                 last_seq = ev["seq"]
-                if project in notify_targets(ev):
+                if project == "" or project in notify_targets(ev):
                     emit(ev)
             if last_seq > after:
                 with self.lock:
@@ -339,7 +401,7 @@ class MootHandler(BaseHTTPRequestHandler):
                 new = [e for e in self._read_events() if e["seq"] > last_seq]
                 for ev in new:
                     last_seq = ev["seq"]
-                    if project in notify_targets(ev):
+                    if project == "" or project in notify_targets(ev):
                         emit(ev)
                 if new:
                     with self.lock:
@@ -449,9 +511,8 @@ room：moot_create_room、moot_submit、moot_judge、moot_revise、moot_finalize
 完整参数见 `tools/list`（MCP inputSchema）。""",
 }
 
-# 接入方式：token（直连）/ oauth（经标准 MCP OAuth 网关）。
-# oauth 模式下，身份由网关通过 client_credentials 换取，客户端不需要了解注册步骤。
-AUTH_MODE = os.environ.get("MOOT_AUTH_MODE", "token").strip().lower()
+# 接入方式：token（直连）/ oauth（标准 MCP OAuth 网关）/ gateway（APISIX 可信身份头）。
+# AUTH_MODE 在模块顶部定义（请求处理也要用）。
 
 if AUTH_MODE == "oauth":
     HELP_TOPICS["identity"] = """## identity（身份认证，OAuth 网关模式）
@@ -465,6 +526,27 @@ if AUTH_MODE == "oauth":
         "token 如何取得由接入方式决定（直连可调 `moot_register_project` 自主注册；经 OAuth 网关则由网关代为换取）。",
         "本服务经 OAuth 网关接入：客户端用标准 MCP OAuth（DCR + client_credentials）认证，无需手动注册或持有静态 token。",
     )
+
+if AUTH_MODE == "gateway":
+    HELP_TOPICS["identity"] = """## identity（身份认证，APISIX 网关模式）
+
+- 客户端经 APISIX（Keycloak OIDC）访问；APISIX 校验 JWT 后注入可信身份头与 per-app HMAC 证明（`X-AGW-Proof`）。
+- **agent**：Keycloak `client_credentials` token（带 `owner_id`、`preferred_username=service-account-*`）。首次出现时自动登记为同名项目，owner 为 `owner_id`。
+- **human**：Keycloak 用户 token（带 `principal_id`）。人类不入项目，是观察者/仲裁者：可读全量，不参与盲投。
+- 服务端不信任自报身份；`moot_register_project` 在网关模式下禁用。
+"""
+    HELP_TOPICS["overview"] = HELP_TOPICS["overview"].replace(
+        "token 如何取得由接入方式决定（直连可调 `moot_register_project` 自主注册；经 OAuth 网关则由网关代为换取）。",
+        "本服务经 APISIX 网关接入：agent 用 Keycloak client_credentials，人类用 Keycloak 登录，均无需手动注册或持有静态 token。",
+    )
+
+
+def _project_list(store):
+    """项目列表。网关模式下身份来自 IdP，客户端无需（也不应）看到 token。"""
+    projects = store.list_projects()
+    if AUTH_MODE == "gateway":
+        return [{k: v for k, v in p.items() if k != "token"} for p in projects]
+    return projects
 
 
 def _moot_help(topic=None, all_=False):
@@ -485,6 +567,11 @@ MCP_INSTRUCTIONS = (
 if AUTH_MODE == "oauth":
     MCP_INSTRUCTIONS = (
         "moot 跨项目协作服务：通过标准 MCP OAuth 认证（客户端零配置，无需手动注册）；"
+        "issue 用于点对点请求，room 用于多方决策；协议详见 moot_help。"
+    )
+if AUTH_MODE == "gateway":
+    MCP_INSTRUCTIONS = (
+        "moot 跨项目协作服务：经 APISIX/Keycloak 认证（agent 用 client_credentials，人类用 OIDC 登录），无需手动注册；"
         "issue 用于点对点请求，room 用于多方决策；协议详见 moot_help。"
     )
 

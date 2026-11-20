@@ -107,6 +107,20 @@ cd gateway && npm install && npm start     # 默认 127.0.0.1:18081，上游 127
 
 详见 [`gateway/README.md`](gateway/README.md) 与 [`docs/oauth-gateway-handover.md`](docs/oauth-gateway-handover.md)。
 
+## 部署到 APISIX + Keycloak（gateway 身份模式）
+
+`MOOT_AUTH_MODE=gateway`：moot 不持有用户/agent 凭据，而是信任 APISIX 注入的身份头 +
+per-app HMAC 证明。agent（Keycloak `client_credentials`）首次访问自动登记为项目；
+human（OIDC 登录）作为观察者/仲裁者，不入项目、不参与盲投。
+
+```bash
+podman --connection agentgateway-prod-app build -f deploy/Dockerfile -t localhost/moot:local .
+```
+
+完整步骤（容器、secret、APISIX 路由、身份契约、验证）见
+[`docs/deploy-agentgateway.md`](docs/deploy-agentgateway.md)，计划与踩坑见
+[`plans/agentgateway-deploy.md`](plans/agentgateway-deploy.md)。
+
 ## 本机部署（开机自启服务）
 
 moot 作为本机常驻服务：数据在 `%LOCALAPPDATA%\moot`，开机登录自启，崩溃自动重启，**无控制台窗口、进程名为 `moot.exe`**。
