@@ -50,4 +50,5 @@
 - [x] 人类独立登录（`apisix-moot` standard flow，回调 `/svc/moot/oauth2/callback`）
 - [ ] Web UI 认证（当前仅端口直连、只读）
 - [ ] 不发布端口（正式私网形态）
-- [ ] agentgateway 仓库三处改动提交
+- [x] 改为**部署期注入**：agentgateway 源码零改动（`deploy/agentgateway/apply.py` +
+      `apisix-moot.yaml`，写 `runtime/<env>/`）
