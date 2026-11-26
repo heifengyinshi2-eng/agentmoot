@@ -1,54 +1,58 @@
-# 计划：部署到 agentgateway（APISIX + Keycloak）
+# 计划：部署到 agentgateway（AppRegistry）
 
 状态：已完成（prod-local 实证）
 级别：L2
-最后更新：2026-11-20
+最后更新：2026-11-26
 
 ## 目标
 
-按 `agentgateway/docs/app-deployment.md` 把 moot 部署为 APISIX 后面的自建服务，
-并解决 agent / human 身份认定。
+把 moot 作为 agentgateway 的 App 部署：平台负责 Keycloak / APISIX / central 凭据 /
+容器编排，moot 只实现 App 契约（`/healthz`、`X-AGW-App` 校验、可信身份头）。
 
 ## 任务
 
-- [x] 调研 app-deployment 与 agentgateway 身份契约（D-011/D-018/D-021）
-- [x] 实测 Keycloak claims：agent（client_credentials）vs human（authorization code）
-- [x] 实测 APISIX：agent token 的 userinfo 返回 403，但 `X-Userinfo` 仍被注入
-- [x] 新增 `moot/gateway_identity.py`（proof 校验 + agent/human 判定）
-- [x] `MOOT_AUTH_MODE=gateway`：身份来自可信头；agent 自动登记；human 观察者
-- [x] 网关模式关闭自注册 / REST 写入；项目列表不返回 token
-- [x] SSE 在网关模式按身份取 project（agent 自身 / human 全量）
-- [x] Docker 镜像（`deploy/Dockerfile`、`.dockerignore`）
-- [x] 部署到 `agentgateway-prod-app`：30001 + named volume + podman secret
-- [x] APISIX 路由 `agw-svc-moot`（userinfo / JWT payload 双路径）
-- [x] 端到端验证（agent / human / 401 / SSE / 重启持久化）
-- [x] 文档 `docs/deploy-agentgateway.md`
+- [x] 调研 `agentgateway/docs/app-deployment.md` 旧接入方式并完成首次部署（2026-11-20）
+- [x] agentgateway 升级为 AppRegistry + APISIX etcd Admin API 后重新部署（2026-11-26）
+- [x] moot 支持 `/healthz`（平台健康检查路径）
+- [x] `moot/gateway_identity.py` 新增“可信头”模式：
+      `X-AGW-App` / `X-AGW-Identity-Type` / `X-AGW-Identity-Mode` / `X-Access-Token` / `X-Userinfo`
+- [x] 可信头模式强制身份：除 `/health`、`/healthz`、`/whoami` 外，缺身份头返回 403
+- [x] 保留旧 HMAC proof 模式（兼容，`MOOT_GATEWAY_PROOF_SECRET`）
+- [x] 注册 AppSpec（`id=moot`、volume `moot-data`、env `MOOT_AUTH_MODE=gateway` 等）
+- [x] `app-reconciler --once` 部署成功：`phase=active`，四项 condition 全 True
+- [x] 验证：人类 OIDC 登录 → UI 200；agent token → `/agent-api/moot/*` 200；
+      MCP / SSE 正常；直连端口业务路径 403
+- [x] 清理旧部署物：`agw-svc-moot` 路由、`apisix-moot` client、`AGW_PROOF_SECRET_MOOT`、
+      podman secret `moot_proof`、`deploy/agentgateway/` 脚本
+- [x] 文档重写 `docs/deploy-agentgateway.md`
 
 ## 关键决策
 
-- **身份判定**：`owner_id` 存在或 `preferred_username=service-account-*` → agent。
-- **人类语义**：不入项目，观察者/仲裁者；可读全量、可发 issue/评论，不参与盲投。
+- **身份来源**：新平台直接给 `X-AGW-Identity-Type`，不再需要 moot 猜 agent/human；
+  proof 机制由平台统一剥离/注入替代。
+- **人类语义**：观察者/仲裁者，不入项目，可读全量、可发 issue/评论，不参与盲投。
 - **agent 语义**：首次出现自动登记为同名项目（`superior=owner_id`）。
-- **不新增自定义头**：moot 自行解 `X-Access-Token` 判定 kind，proof 仍按
-  `app|sub|principal|request|exp`，与 agentgateway 约定一致。
-- **网关模式下 REST 只读**：写操作必须走 MCP，避免自报 creator/author。
+- **多 agent 身份**：平台默认 `app.moot` 凭据换出的 token 主体是
+  `service-account-agent-moot`，会让所有 agent 收敛成同一 principal。为保持 moot 的
+  多 agent 语义，给参与协作的 agent client 各加 `aud=apisix-app-moot` 的 audience mapper，
+  agent 用自己的 client_credentials token 访问 `/agent-api/moot/*`。
+  代价：绕过 central 的 App 级 ACL（凭据授权），由 moot 自身做项目级隔离。
+- **不发布端口才是终态**：当前平台仍发布 `192.168.13.139:<port>`，靠 moot 的
+  身份头强制兜底（直连业务路径 403）。
 
 ## 踩坑记录
 
-- `podman run --memory` 在本机 rootless cgroup 报 `open memory.max: No such file`，
-  暂不加资源限制。
-- 镜像默认 OCI 格式会忽略 Dockerfile `HEALTHCHECK`，改用 `--health-cmd`。
-- 直接改 `state.json` / 另起进程写 store 会被运行中的 server 内存覆盖；seed 数据
-  必须先停容器，用同卷一次性容器写完再启动。
-- APISIX `up-apisix` 在容器已运行时不会重启，改路由后必须显式
-  `podman restart agw-apisix`。
+- **平台路由裸路径 500**：`proxy-rewrite ^/svc/moot(/.*)?$ → $1` 对 `/svc/moot`
+  产生空 upstream path → 500。必须用 `/svc/moot/`。平台侧问题，影响所有 app。
+- **reconciler 默认是守护循环**：不带 `--once` 会每 3s 轮询且永不退出，别当成卡死。
+- **npx 在 Windows/Git Bash 下会挂起**：直接
+  `node v2/node_modules/tsx/dist/cli.mjs src/cli/app-reconciler.ts`。
+- **admin token 用 master realm**：`admin-cli` 必须走 `/realms/master/...`。
+- 旧静态路由随 APISIX 切 etcd 自动消失，无需手工删（Admin API 查无此 ID）。
+- 直接改 `state.json` / 另起进程写 store 会被运行中 server 的内存覆盖。
 
 ## 后续
 
-- [x] 独立 `apisix-moot` client + `AGW_PROOF_SECRET_MOOT`
-- [x] 给 `agent-alpha` / `agent-beta` 增加 `moot-audience` mapper（二者实测 200）
-- [x] 人类独立登录（`apisix-moot` standard flow，回调 `/svc/moot/oauth2/callback`）
-- [ ] Web UI 认证（当前仅端口直连、只读）
 - [ ] 不发布端口（正式私网形态）
-- [x] 改为**部署期注入**：agentgateway 源码零改动（`deploy/agentgateway/apply.py` +
-      `apisix-moot.yaml`，写 `runtime/<env>/`）
+- [ ] 若平台后续支持 Edge 注入调用方 agent 身份，可去掉 per-agent audience mapper
+- [ ] Web UI 增加“当前身份 / 退出登录”入口（当前靠 APISIX session）

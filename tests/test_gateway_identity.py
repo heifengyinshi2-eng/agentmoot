@@ -1,4 +1,4 @@
-"""网关身份（APISIX 可信头 + HMAC 证明）单元测试。"""
+"""网关身份单元测试：可信头（agentgateway AppRegistry）与 HMAC 证明（旧部署）。"""
 import base64
 import hashlib
 import hmac
@@ -43,13 +43,19 @@ def headers(secret, sub="sub-1", principal="agent-alpha", claims=None, exp=None,
 
 
 CFG = gi.GatewayConfig("moot", ["s3cret"])
+TRUST = gi.GatewayConfig("moot", [], trust_headers=True)
 
 
+# ── 旧部署：HMAC 证明 ──
 def test_agent_identity_via_access_token():
     claims = {"sub": "sub-1", "principal_id": "agent-alpha", "owner_id": "demo",
               "preferred_username": "service-account-agent-alpha"}
     actor = gi.identity(headers("s3cret", claims=claims), CFG)
-    assert actor == {"principal": "agent-alpha", "kind": "agent", "owner": "demo", "sub": "sub-1"}
+    assert actor["principal"] == "agent-alpha"
+    assert actor["kind"] == "agent"
+    assert actor["owner"] == "demo"
+    assert actor["sub"] == "sub-1"
+    assert actor["mode"] == "proof"
 
 
 def test_human_identity_via_userinfo():
@@ -84,3 +90,52 @@ def test_missing_proof_rejected():
 def test_previous_secret_accepted():
     cfg = gi.GatewayConfig("moot", ["new", "old"])
     assert gi.identity(headers("old", claims={"sub": "sub-1"}), cfg) is not None
+
+
+# ── 新部署：agentgateway AppRegistry 可信头 ──
+def trust_headers(identity_type, claims=None, app="moot"):
+    h = Headers({"X-AGW-App": app, "X-AGW-Identity-Type": identity_type,
+                 "X-AGW-Identity-Mode": "jwt", "X-AGW-Request-Id": "req-1"})
+    if claims is not None:
+        h["X-Access-Token"] = "h." + b64(claims) + ".s"
+    return h
+
+
+def test_trusted_human():
+    claims = {"sub": "u-1", "principal_id": "demo", "preferred_username": "demo"}
+    h = trust_headers("human", claims)
+    h["X-Userinfo"] = b64(claims)
+    actor = gi.identity(h, TRUST)
+    assert actor["kind"] == "human"
+    assert actor["principal"] == "demo"
+    assert actor["mode"] == "trusted-header"
+
+
+def test_trusted_agent():
+    claims = {"sub": "s-2", "principal_id": "agent-moot", "owner_id": "demo",
+              "preferred_username": "service-account-agent-moot"}
+    actor = gi.identity(trust_headers("agent", claims), TRUST)
+    assert actor["kind"] == "agent"
+    assert actor["principal"] == "agent-moot"
+    assert actor["owner"] == "demo"
+
+
+def test_trusted_app_mismatch_rejected():
+    claims = {"sub": "u-1", "principal_id": "demo"}
+    assert gi.identity(trust_headers("human", claims, app="other"), TRUST) is None
+
+
+def test_trusted_without_claims_rejected():
+    assert gi.identity(trust_headers("human"), TRUST) is None
+
+
+def test_trusted_identity_type_wins_over_claims():
+    # 平台判定 human，即使 claims 带 owner_id 也按 human
+    claims = {"sub": "u-1", "principal_id": "demo", "owner_id": "x"}
+    actor = gi.identity(trust_headers("human", claims), TRUST)
+    assert actor["kind"] == "human"
+
+
+def test_trust_mode_requires_identity():
+    assert TRUST.requires_identity() is True
+    assert CFG.requires_identity() is False

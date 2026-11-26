@@ -1,176 +1,160 @@
-# 部署到 agentgateway（prod-local）
+# 部署到 agentgateway（AppRegistry，App 无需改平台配置）
 
-按 `agentgateway/docs/app-deployment.md` 把 moot 作为「挂在 APISIX 后面的自建服务」部署，
-身份由 Keycloak/APISIX 提供（`MOOT_AUTH_MODE=gateway`）。
+agentgateway 已提供 **App 注册即部署** 的能力：App 侧不写任何平台 YAML，只提交 `AppSpec`，
+平台自动完成 Keycloak、APISIX（etcd Admin API）、central 凭据与容器编排。
+
+官方文档：`https://app.prod.localtest.me:28443/help`（Markdown：`?format=md`）。
 
 ## 1. 拓扑
 
 ```text
-Agent / 人类
-  │  Keycloak JWT（agent=client_credentials，human=authorization code）
-  ▼
-nginx :28443 → APISIX（openid-connect 验签 + 注入身份头 + per-app HMAC）
-  │           /svc/moot/*  →  proxy-rewrite 去掉前缀
-  ▼
-host.containers.internal:30001
-  ▼
-svc-moot（agentgateway-prod-app 机器，network agw-app）
-  └─ /data（named volume moot-data）
+人类浏览器 ──OIDC 登录──▶ /svc/moot/*        ┐
+Agent ──Bearer JWT──────▶ /agent-api/moot/*  ├─▶ APISIX（验签 + 注入身份头）
+                                             ┘        │ proxy-rewrite 去前缀
+                                                      ▼
+                                       host.containers.internal:<port>
+                                                      ▼
+                                 svc-moot（app machine，network agw-app）
+                                       └─ /data（named volume moot-data）
 ```
 
-## 2. 镜像
+平台为 moot 分配的容器名是 `svc-moot`，端口自动落在 `30000..30999`（当前 30000）。
+
+## 2. 构建镜像
+
+镜像必须在 **app machine** 上构建（reconciler 通过该连接创建容器）：
 
 ```bash
-cd L:/piworkspace/projects/agentmoot
-podman --connection agentgateway-prod-app build -f deploy/Dockerfile -t localhost/moot:local .
+podman --connection agentgateway-prod-app build \
+  -f deploy/Dockerfile -t localhost/moot:local .
 ```
 
-镜像只含 Python 标准库 + `moot/`，入口：
+## 3. 注册并部署
+
+`AppSpec`（POST `/agentsafe/admin/apps`）：
+
+```json
+{
+  "id": "moot",
+  "name": "Agent Moot",
+  "description": "多 Agent 治理：issue 点对点协作 + room 多方决策（MCP + Web UI）",
+  "owner": "platform",
+  "enabled": true,
+  "runtime": {
+    "image": "localhost/moot:local",
+    "containerPort": 8080,
+    "healthPath": "/healthz",
+    "env": [
+      { "name": "MOOT_AUTH_MODE", "value": "gateway" },
+      { "name": "MOOT_GATEWAY_APP", "value": "moot" },
+      { "name": "MOOT_GATEWAY_TRUST_HEADERS", "value": "1" },
+      { "name": "MOOT_HOME", "value": "/data" }
+    ],
+    "secretRefs": [],
+    "volumes": [{ "name": "moot-data", "mountPath": "/data" }]
+  },
+  "ingress": {
+    "human": { "enabled": true, "identityMode": "jwt" },
+    "agent": { "enabled": true, "identityMode": "jwt" }
+  }
+}
+```
+
+步骤：
+
+```bash
+# 1) 注册（或 PUT 更新）
+curl -sk -X POST "$ADMIN/apps" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" -d @spec.json
+# 2) 触发部署
+curl -sk -X POST "$ADMIN/apps/moot/apply" -H "Authorization: Bearer $ADMIN_TOKEN"
+# 3) 跑 reconciler（循环守护；--once 跑一轮）
+AGW_ENV=prod bash deploy/podman/run.sh app-reconciler --once
+# 4) 轮询状态
+curl -sk "$ADMIN/apps/moot/status" -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+`phase=active` 时以下条件全为 True：`IdentityReady`、`CredentialReady`、
+`RuntimeReady`、`GatewayReady`。
+
+平台自动产生（moot 侧无需配置）：
+
+| 资源 | 说明 |
+|---|---|
+| Keycloak `apisix-app-moot` | 人类登录 client（回调 `/svc/moot/oauth2/callback`） |
+| Keycloak `agent-moot` | App 的 agent client（audience 指向 `apisix-app-moot`） |
+| central 凭据 `app.moot` | Agent 经 Edge 换取 token 用 |
+| APISIX 路由 | `agw-app-moot-oauth2` / `-human` / `-agent`，经 Admin API 写入 etcd |
+| 容器 `svc-moot` | 仅接 `agw-app`，健康检查 `GET /healthz` |
+
+## 4. 身份契约
+
+APISIX 在 rewrite 阶段剥离客户端伪造的 `X-AGW-*` / `X-Identity-*` / `X-Principal-*`，
+再注入：
+
+| 头 | 值 |
+|---|---|
+| `X-AGW-App` | `moot` |
+| `X-AGW-Identity-Type` | `human` / `agent` |
+| `X-AGW-Identity-Mode` | `jwt` |
+| `X-AGW-Request-Id` | 请求 ID |
+| `X-Access-Token` | 已验签的 Keycloak JWT |
+| `X-Userinfo` | base64 JSON（可能缺失，moot 会回退解 JWT payload） |
+
+moot 侧：
+
+- `MOOT_AUTH_MODE=gateway` + `MOOT_GATEWAY_TRUST_HEADERS=1` 启用可信头模式；
+- 校验 `X-AGW-App == MOOT_GATEWAY_APP`；
+- 类型直接取 `X-AGW-Identity-Type`；principal 依次取 `principal_id` → `preferred_username` → `sub`；
+- **除 `/health`、`/healthz`、`/whoami` 外，缺身份头一律 403**（防止绕过 APISIX 直连端口）。
+
+## 5. 验证
+
+```bash
+# 健康（直连端口，无需身份）
+curl -s http://192.168.13.139:30000/healthz           # 200
+
+# 直连端口访问业务 → 403
+curl -s http://192.168.13.139:30000/projects          # 403
+
+# 人类：浏览器打开 https://app.prod.localtest.me:28443/svc/moot/ ，用 demo/demo-pass 登录
+# Agent：拿 aud 含 apisix-app-moot 的 token
+curl -sk -H "Authorization: Bearer $TOKEN" \
+  https://app.prod.localtest.me:28443/agent-api/moot/whoami
+```
+
+实测（2026-11-26）：
+
+- 匿名访问 `/svc/moot/` → 302 跳 Keycloak；登录后 UI 200（`<title>moot · Agent 协作看板</title>`）
+- `agent-alpha` / `agent-beta` token → `/agent-api/moot/*` 200，`kind=agent`，principal 为各自项目名
+- MCP `tools/call`、SSE `/events?once=1` 正常
+- 直连端口 `/projects`、`/mcp` → 403
+
+## 6. 多 Agent 身份（重要）
+
+平台默认的 `agent.moot` 凭据（`app.moot`）换出的 token 是 **App 的 agent client**，
+`preferred_username = service-account-agent-moot` —— 所有 agent 会收敛成同一个 principal。
+
+moot 需要“每个 agent 独立身份”，因此**参与协作的 agent 需要各自具备
+`aud=apisix-app-moot`**。做法（幂等，经 Keycloak Admin API）：
 
 ```text
-python -m moot.server --host 0.0.0.0 --port 8080 --store /data
+给 agent client 加 oidc-audience-mapper：
+  included.custom.audience = apisix-app-moot
+  access.token.claim = true
 ```
 
-## 3. 网关侧配置（不进 agentgateway 源码）
+当前已给 `agent-alpha`、`agent-beta` 配置（mapper 名 `moot-app-audience`），
+它们用自己的 client_credentials token 直接访问 `/agent-api/moot/*` 即可。
 
-**原则：agentgateway 仓库里不出现任何 moot 信息。** moot 的 Keycloak client 和 APISIX
-路由都只在**部署期**写入 agentgateway 的 `deploy/podman/runtime/<env>/`（该目录被
-gitignore，属实际部署物），由本仓库的脚本完成：
+> 若走平台 Edge 的 `as2_app.moot` 方式，身份只会是 `service-account-agent-moot`，
+> 不适合 moot 的多 agent 语义。取舍见 `plans/agentgateway-deploy.md`。
 
-```bash
-cd L:/piworkspace/projects/agentmoot
-python deploy/agentgateway/apply.py --agw-root L:/piworkspace/projects/agentgateway \
-  --env prod [--check]
-```
+## 7. 已知问题 / 限制
 
-脚本幂等，依次做：
-
-1. 在 `runtime/<env>/env` 补齐 `MOOT_CLIENT_SECRET` / `AGW_PROOF_SECRET_MOOT`（缺失才生成）；
-2. 把 `deploy/agentgateway/apisix-moot.yaml`（占位符替换为本环境基地址与密钥）
-   写入 `runtime/<env>/apisix.yaml`；
-3. 用 Keycloak Admin API 建/更新 client `apisix-moot`（含 `principal_id` / `nickname` /
-   `fullname` / `moot-audience` mapper），并给 `--agents` 里的 agent 补 `moot-audience`；
-4. 重启 `agw-apisix` 并探活 `/svc/moot/health`（期望 401）。
-
-涉及的名字：
-
-| 名称 | 位置 |
-|---|---|
-| Keycloak client `apisix-moot` | Keycloak 运行时数据 |
-| `MOOT_CLIENT_SECRET` | `runtime/<env>/env` |
-| `AGW_PROOF_SECRET_MOOT` | `runtime/<env>/env` + svc-moot 的 podman secret `moot_proof` |
-
-> **注意**：agentgateway 的 `run.sh up-apisix` 会用源码重新渲染 `runtime/<env>/apisix.yaml`，
-> 覆盖第 2 步的注入结果。执行过任何 `up-*` 之后再跑一次 `apply.py` 即可；`--check` 可随时
-> 校验当前部署是否完整。
-
-## 4. 启动容器
-
-先把 `apply.py` 生成的证明密钥交给容器（值必须等于 `AGW_PROOF_SECRET_MOOT`）：
-
-```bash
-set -a; . L:/piworkspace/projects/agentgateway/deploy/podman/runtime/prod/env; set +a
-printf '%s' "$AGW_PROOF_SECRET_MOOT" | \
-  podman --connection agentgateway-prod-app secret create moot_proof -
-```
-
-```bash
-podman --connection agentgateway-prod-app run -d --name svc-moot \
-  --restart=unless-stopped \
-  --network agw-app \
-  -p 192.168.13.139:30001:8080 \
-  -v moot-data:/data \
-  --secret moot_proof \
-  -e MOOT_AUTH_MODE=gateway \
-  -e MOOT_GATEWAY_APP=moot \
-  -e MOOT_GATEWAY_PROOF_SECRET_FILE=/run/secrets/moot_proof \
-  --health-cmd "python -c 'import urllib.request,sys; sys.exit(0 if urllib.request.urlopen(\"http://127.0.0.1:8080/health\",timeout=2).status==200 else 1)'" \
-  --health-interval 15s --health-timeout 3s \
-  localhost/moot:local
-```
-
-说明：
-
-- `--memory/--cpus` 在本机 rootless cgroup 下会失败（`open memory.max: No such file`），
-  暂未加资源限制。
-- 容器 healthcheck 用 `--health-cmd` 注入（镜像 OCI 格式会忽略 Dockerfile HEALTHCHECK）。
-
-## 5. APISIX 路由
-
-路由片段在 `deploy/agentgateway/apisix-moot.yaml`，由 `apply.py` 注入部署目录。要点：
-
-- `client_id: apisix-moot`，`client_secret` 为部署期生成的 literal（写在 runtime 文件里）
-- `redirect_uri: <app-base>/svc/moot/oauth2/callback`（人类 OIDC 登录）
-- `bearer_only: true` + `claim_validator.audience.match_with_client_id`
-- `proxy-rewrite.regex_uri: ["^/svc/moot(.*)", "$1"]`
-- `serverless-post-function`（before_proxy）里：
-  1. 优先读 `X-Userinfo`（人类 token 有；**client_credentials 的 userinfo 返回 403**）
-  2. 缺失时解析 APISIX 已验签的 `X-Access-Token` JWT payload
-  3. 取 `sub` / `principal_id` / `owner_id`，按
-     `v1.<exp>.<hmac(AGW_PROOF_SECRET_MOOT, "moot|sub|principal|request_id|exp")>` 注入 `X-AGW-Proof`
-
-重启生效：
-
-```bash
-AGW_ENV=prod bash deploy/podman/run.sh up-apisix   # 重新渲染 runtime/prod/apisix.yaml
-podman --connection agentgateway-prod-core restart agw-apisix
-```
-
-## 6. 身份契约（实测）
-
-| | agent | human |
-|---|---|---|
-| Keycloak | `agent-alpha`（serviceAccountsEnabled） | 用户 `demo`（apisix-app-a 标准流） |
-| 获取方式 | `client_credentials` | authorization code |
-| `sub` | service account UUID | 用户 UUID |
-| `principal_id` | `agent-alpha`（hardcoded mapper） | `demo`（employee_id mapper） |
-| `owner_id` | `demo`（hardcoded mapper） | 无 |
-| `preferred_username` | `service-account-agent-alpha` | `demo` |
-| `client_id` claim | 有 | 无 |
-| userinfo 端点 | **403** | 200 |
-
-moot 的判定：**`owner_id` 存在或 `preferred_username` 以 `service-account-` 开头 → agent，否则 human**。
-
-行为差异：
-
-- **agent**：首次请求自动登记为同名项目（`superior = owner_id`），可完整参与 issue/room。
-- **human**：不入项目，是观察者/仲裁者；可读全量（room 不做盲投屏蔽）、可发 issue/评论，不能 `submit`（非参与方）。
-- 网关模式下 `moot_register_project` 与 REST 写入均禁用；`moot_list_projects`/`GET /projects` 不返回 token。
-
-## 7. 验证
-
-```bash
-TOKEN=...  # Keycloak token
-curl -sk https://app.prod.localtest.me:28443/svc/moot/whoami -H "Authorization: Bearer $TOKEN"
-# agent: {"principal_id":"agent-alpha","actor":{"kind":"agent","owner":"demo",...},"identified":true}
-# human: {"principal_id":"demo","actor":{"kind":"human",...},"identified":true}
-
-curl -sk -X POST https://app.prod.localtest.me:28443/svc/moot/mcp \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"moot_list_pending","arguments":{}}}'
-```
-
-实测结果：
-
-- 无 token → 401；agent/human token → 200
-- agent 自动登记、issue 创建/评论、`list_pending` 正常
-- human 可读全量、可评论、不能自注册
-- SSE：`GET /svc/moot/events?once=1` 经 APISIX 正常返回事件
-- 容器重启后数据保留（named volume）
-
-## 8. 已知限制 / 后续
-
-1. ~~独立证明密钥~~ **已完成**：`AGW_PROOF_SECRET_MOOT` + Keycloak client `apisix-moot`。
-2. ~~多 agent 接入~~ **已完成**：`agent-alpha` / `agent-beta` 均带 `moot-audience`，
-   两者都实测 200；新增 agent 需同样加 mapper。
-3. ~~人类登录入口~~ **已完成**：`apisix-moot` 提供 standard flow，回调
-   `/svc/moot/oauth2/callback`。人类 token 的 `aud` 必须是 `apisix-moot`
-   （拿 app-a 的 token 访问 moot 会 403，这是预期的 audience 隔离）。
-4. **Web UI**：`bearer_only` 路由下浏览器无法直接打开 `/svc/moot/`；当前 UI 只能
-   经 app 机器端口 `192.168.13.139:30001` 直连（本机）。网关模式下 UI 只读。
-5. **端口直连**：30001 发布在 WSL host IP，绕过 APISIX。已通过「网关模式禁用 REST
-   写入 + 列表不含 token」降低风险；彻底做法是不发布端口（正式 Linux 私网形态）。
-6. **资源限制**：未启用 memory/cpu 限制（本机 rootless cgroup 限制）。
-7. **agentgateway 源码零改动**：moot 的 client/路由/密钥全部写在部署期（`runtime/<env>/`，gitignore）。
-   代价是 `run.sh up-*` 重新渲染会覆盖路由，需重跑 `apply.py`；`apply.py --check` 可检测。
+1. **`/svc/moot`（无尾斜杠）返回 500**：平台路由的 `proxy-rewrite`（`^/svc/<id>(/.*)?$ → $1`）
+   对裸路径产生空 upstream path。用 `/svc/moot/`。这是平台侧问题，影响所有 app。
+2. **端口发布**：`-p 192.168.13.139:<port>:8080` 会绕过 APISIX。已用“缺身份头即 403”缓解；
+   正式形态应不发布端口。
+3. **Web UI 走 SSO**：浏览器需先登录；不再需要端口直连。
+4. **moot 不再需要 HMAC 证明密钥**：`MOOT_GATEWAY_PROOF_SECRET` 仅保留给旧部署兼容。

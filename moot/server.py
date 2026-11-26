@@ -61,6 +61,12 @@ class MootHandler(BaseHTTPRequestHandler):
 
     def _handle(self):
         parts = self._path_parts()
+        # 可信头模式下，除健康检查/诊断外一律要求网关身份（防止绕过 APISIX 直连端口）
+        if AUTH_MODE == "gateway" and GATEWAY_CFG.requires_identity():
+            exempt = parts in ([], ["health"], ["healthz"], ["whoami"])
+            if not exempt and self._gateway_identity() is None:
+                self._send(403, {"error": "缺少网关身份头：请经 APISIX 访问（X-AGW-App/X-AGW-Identity-Type）"})
+                return
         if parts and parts[0] == "mcp":
             self._handle_mcp()
             return
@@ -89,7 +95,7 @@ class MootHandler(BaseHTTPRequestHandler):
     # ── 路由 ──
     def _dispatch(self, method, parts, body):
         s = self.store
-        if not parts or parts == ["health"]:
+        if not parts or parts in (["health"], ["healthz"]):
             return {"ok": True, "service": "moot", "projects": len(s.list_projects())}
 
         # 网关模式下身份只能来自 IdP：REST 写入（含自报 creator/author）一律关闭，
@@ -228,6 +234,9 @@ class MootHandler(BaseHTTPRequestHandler):
         return {
             "auth_mode": AUTH_MODE,
             "gateway_app": GATEWAY_CFG.app if GATEWAY_CFG.enabled() else None,
+            "trust_headers": GATEWAY_CFG.trust_headers,
+            "identity_type": self.headers.get("X-AGW-Identity-Type"),
+            "identity_mode": self.headers.get("X-AGW-Identity-Mode"),
             "has_proof": bool(self.headers.get("X-AGW-Proof")),
             "has_userinfo": bool(self.headers.get("X-Userinfo")),
             "has_access_token": bool(self.headers.get("X-Access-Token")),

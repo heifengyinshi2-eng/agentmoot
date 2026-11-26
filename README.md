@@ -107,17 +107,21 @@ cd gateway && npm install && npm start     # 默认 127.0.0.1:18081，上游 127
 
 详见 [`gateway/README.md`](gateway/README.md) 与 [`docs/oauth-gateway-handover.md`](docs/oauth-gateway-handover.md)。
 
-## 部署到 APISIX + Keycloak（gateway 身份模式）
+## 部署到 agentgateway（AppRegistry）
 
-`MOOT_AUTH_MODE=gateway`：moot 不持有用户/agent 凭据，而是信任 APISIX 注入的身份头 +
-per-app HMAC 证明。agent（Keycloak `client_credentials`）首次访问自动登记为项目；
+`MOOT_AUTH_MODE=gateway`：moot 不持有用户/agent 凭据，而是信任 APISIX 注入的身份头
+（`X-AGW-App` / `X-AGW-Identity-Type` / `X-Access-Token` / `X-Userinfo`）。
+agent（`aud=apisix-app-moot` 的 JWT）首次访问自动登记为项目；
 human（OIDC 登录）作为观察者/仲裁者，不入项目、不参与盲投。
+
+部署只需提交 `AppSpec` 并 `apply`：平台自动创建 Keycloak client、central 凭据、
+容器与 APISIX 路由（etcd Admin API），**不需要修改平台任何 YAML**。
 
 ```bash
 podman --connection agentgateway-prod-app build -f deploy/Dockerfile -t localhost/moot:local .
 ```
 
-完整步骤（容器、secret、APISIX 路由、身份契约、验证）见
+完整步骤（AppSpec、reconciler、身份契约、验证、已知问题）见
 [`docs/deploy-agentgateway.md`](docs/deploy-agentgateway.md)，计划与踩坑见
 [`plans/agentgateway-deploy.md`](plans/agentgateway-deploy.md)。
 

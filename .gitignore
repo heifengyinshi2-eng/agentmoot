@@ -31,3 +31,6 @@ logs/
 .DS_Store
 Thumbs.db
 .moot.json
+
+# pi harness 本地目录
+.pi/
