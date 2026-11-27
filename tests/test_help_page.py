@@ -1,12 +1,14 @@
 """帮助页测试：/help（HTML）、/help.md、/help.json 三种形态。"""
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
 import urllib.request
+import urllib.error
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -91,6 +93,59 @@ class TestHelpPage(unittest.TestCase):
         with urllib.request.urlopen(req, timeout=10) as r:
             body = r.read().decode()
         self.assertNotIn("<script>alert(1)</script>", body)
+
+
+class TestPublicHelpInGatewayMode(unittest.TestCase):
+    """网关可信头模式下，帮助页应当无需登录/无需身份头即可访问。"""
+
+    PORT = 18131
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root = tempfile.mkdtemp(prefix="moot-gw-help-")
+        env = dict(os.environ)
+        env.update({
+            "MOOT_AUTH_MODE": "gateway",
+            "MOOT_GATEWAY_APP": "moot",
+            "MOOT_GATEWAY_TRUST_HEADERS": "1",
+        })
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        cls.proc = subprocess.Popen(
+            [sys.executable, "-m", "moot.server", "--host", "127.0.0.1",
+             "--port", str(cls.PORT), "--store", cls.root],
+            cwd=repo, env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        cls.base = f"http://127.0.0.1:{cls.PORT}"
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(cls.base + "/healthz", timeout=1)
+                return
+            except Exception:
+                if cls.proc.poll() is not None:
+                    raise RuntimeError("gateway 模式 moot 启动失败")
+                time.sleep(0.2)
+        raise RuntimeError("moot 服务未就绪")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.proc.terminate()
+        try:
+            cls.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            cls.proc.kill()
+
+    def test_help_is_public(self):
+        for path in ("/help", "/help.md", "/help.json"):
+            with urllib.request.urlopen(self.base + path, timeout=10) as r:
+                self.assertEqual(r.status, 200, path)
+                self.assertTrue(r.read())
+
+    def test_business_paths_still_require_identity(self):
+        # 公开的只有帮助页；业务路径直连（无可信头）仍须 403
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(self.base + "/projects", timeout=10)
+        self.assertEqual(ctx.exception.code, 403)
 
 
 if __name__ == "__main__":

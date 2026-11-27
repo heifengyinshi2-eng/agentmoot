@@ -64,7 +64,11 @@ class MootHandler(BaseHTTPRequestHandler):
         parts = self._path_parts()
         # 可信头模式下，除健康检查/诊断外一律要求网关身份（防止绕过 APISIX 直连端口）
         if AUTH_MODE == "gateway" and GATEWAY_CFG.requires_identity():
-            exempt = parts in ([], ["health"], ["healthz"], ["whoami"])
+            exempt = parts in (
+                [], ["health"], ["healthz"], ["whoami"],
+                # 帮助页是公开文档：让新 agent/人无需登录即可看到接入方式
+                ["help"], ["help.md"], ["help.json"],
+            )
             if not exempt and self._gateway_identity() is None:
                 self._send(403, {"error": "缺少网关身份头：请经 APISIX 访问（X-AGW-App/X-AGW-Identity-Type）"})
                 return

@@ -39,6 +39,8 @@
 - [x] 修正 Edge 路径语义：路径必须**相对 App**（`/whoami`、`/mcp`、`/events`），
       带 `/agent-api/moot` 会双前缀 404（凭据 baseUrl 已含该前缀，Edge 直接拼接）
 - [x] 文档 + 帮助页同步该语义，镜像重建并重新部署
+- [x] 帮助页免登录：moot 侧 `/help*` 加入豁免；APISIX 加独立路由
+      `agw-app-moot-public-help`（priority 115，无 OIDC，清伪造身份头）
 
 ## 关键决策
 

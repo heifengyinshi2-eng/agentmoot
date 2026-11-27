@@ -108,7 +108,8 @@ moot 侧：
 - `MOOT_AUTH_MODE=gateway` + `MOOT_GATEWAY_TRUST_HEADERS=1` 启用可信头模式；
 - 校验 `X-AGW-App == MOOT_GATEWAY_APP`；
 - 类型直接取 `X-AGW-Identity-Type`；principal 依次取 `principal_id` → `preferred_username` → `sub`；
-- **除 `/health`、`/healthz`、`/whoami` 外，缺身份头一律 403**（防止绕过 APISIX 直连端口）。
+- **除 `/health`、`/healthz`、`/whoami`、`/help`（含 `.md` / `.json`）外，缺身份头一律 403**
+  （防止绕过 APISIX 直连端口；帮助页是公开文档，需免登录）。
 
 ## 5. 验证
 ```bash
@@ -131,6 +132,44 @@ curl -sk -H "Authorization: Bearer $TOKEN" \
 - MCP `tools/call`、SSE `/events?once=1` 正常
 - 直连端口 `/projects`、`/mcp` → 403
 - 帮助页 `…/svc/moot/help` → 200（HTML）；`help.md` / `help.json` 同路径可换格式
+
+## 5.1 公开帮助页（免登录）
+
+`/svc/moot/help` 是给新 agent / 新同学看的接入文档，不应要求 SSO。平台路由生成器
+（`route-builder.ts`）目前没有「公开路径」开关，因此额外加一条**独立 APISIX 路由**：
+
+```bash
+curl -s -X PUT "http://127.0.0.1:29180/apisix/admin/routes/agw-app-moot-public-help" \
+  -H "X-API-KEY: $APISIX_ADMIN_KEY" -H "content-type: application/json" -d '{
+    "name": "agw-app-moot-public-help",
+    "priority": 115,
+    "uris": ["/svc/moot/help", "/svc/moot/help.md", "/svc/moot/help.json"],
+    "plugins": {
+      "proxy-rewrite": {"regex_uri": ["^/svc/moot(/.*)?$", "$1"]},
+      "serverless-post-function": {"phase": "before_proxy", "functions": [
+        "return function(conf, ctx)\n  local hs = {\"X-AGW-App\",\"X-AGW-Identity-Type\",\"X-AGW-Identity-Mode\",\"X-Access-Token\",\"X-Userinfo\",\"X-Principal-Id\",\"X-Owner-Id\",\"X-AGW-Proof\"}\n  for _, h in ipairs(hs) do ngx.req.clear_header(h) end\n  ngx.req.set_header(\"X-AGW-Request-Id\", ngx.var.request_id or \"\")\nend"
+      ]}
+    },
+    "upstream": {"type": "roundrobin", "scheme": "http", "pass_host": "node",
+                 "nodes": {"host.containers.internal:30000": 1}}
+  }'
+```
+
+要点：
+
+- **priority 115**：高于人类路由（110）、低于 oauth2 路由（120），只精确匹配三个帮助 URI；
+- **不挂** `openid-connect` —— 这正是免登录的原因；
+- 清掉客户端可能伪造的身份头，避免把「公开路由」变成身份注入入口；
+- 该路由 ID 不在 reconciler 的 `allPossibleAppRouteIds` 里，重跑 reconciler 不会删；
+  但**删除 App 时需手工清理**：`curl -X DELETE .../routes/agw-app-moot-public-help`。
+
+moot 侧对应改动：`/help`、`/help.md`、`/help.json` 加入免身份豁免列表
+（其余业务路径直连仍 403）。
+
+实测（2026-11-27）：匿名 `GET /svc/moot/help` → **200**（11.4 KB），`help.md` / `help.json`
+同路径可用；`/svc/moot/` 仍 302 跳登录。
+
+> 若平台后续在 AppSpec 里提供 `ingress.human.publicPaths`，应改用平台能力并删除这条手工路由。
 
 ## 6. 多 Agent 身份（平台已内建）
 
