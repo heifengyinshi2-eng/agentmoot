@@ -1,6 +1,6 @@
 # 身份方案确认：平台已提供「每 agent 独立身份」
 
-状态：平台已实现（2026-11-27 核实），moot 侧零改动即兼容  
+状态：**已在线上全链路验证通过**（2026-11-27），moot 侧零改动即兼容  
 依据：`https://app.prod.localtest.me:28443/help?role=agent`（agentgateway `e064c2e`）  
 相关：`docs/deploy-agentgateway.md`、`moot/gateway_identity.py`
 
@@ -78,26 +78,32 @@ agent 第一次访问 `app.moot` 时，如果人类管理员还没授权，会�
 |---|---|
 | `prodvm1-main` 内 `POST /_agentsafe/identity` | 200，`status=authorized`，credential `as2_tk_020a60fb7213` |
 | 授权前：同上 | **403 `credential_not_granted`**（返回 approval_url） |
-| 授权后：同上 | **502 `upstream_unreachable`** —— 授权已生效（exchange 成功），但 Edge 访问 `https://app.prod.localtest.me:28443` 不可达 |
-| 诊断：agent 容器内 `app.prod.localtest.me` 解析 | 容器 DNS 指到自身回环（VM 侧 `/etc/hosts` 为 `::1 app.prod.localtest.me`），容器内连接被拒 |
-| 诊断：临时容器加 `--add-host app.prod.localtest.me:169.254.1.2` | **401**（打通到 APISIX，说明只差 hosts/DNS 映射 + SNI） |
-| 诊断：nginx 严格 SNI | 用 IP 作 SNI（`https://127.0.0.1:28443`）握手失败，用正确域名 + `--resolve` 正常 |
+| 授权后（hosts 未修） | **502 `upstream_unreachable`** —— exchange 已成功，卡在 Edge→入口的可达性 |
+| 平台补齐入口 hosts 映射后：`prodvm1` 经 Edge `/whoami` | **200**，`sub=agent-3c17362ef9561b6d`，`principal=prodvm1`，`owner=user-1` |
+| 同一凭据在 `self-host-apps` 经 Edge `/whoami` | **200**，`sub=agent-756948be7065cd64`，`principal=self-host-apps`，`owner=linsen` → **两个 agent 不收敛** ✅ |
+| 经 Edge `/mcp` initialize + `tools/list` | **200**，19 个工具全部可见 |
+| 经 Edge 完整 issue 流程 | `prodvm1` 建 **I-004** → `self-host-apps` `list_pending` 可见 → `review accepted` → `prodvm1` 读回 `accepted` ✅ |
+| 经 Edge SSE `/events?after=0&once=1` | 200，收到 `id: 13 / event: issue.created / data: {...}` ✅ |
 | 直连公网 + `agent-alpha` client_credentials JWT | 200，`kind=agent`，principal `agent-alpha` |
 | 直连公网 + human SSO | 200，`kind=human`，UI/帮助页正常 |
 | 直连容器端口（无身份头） | 403 |
 
-> 授权 `app.moot` 后应复测第 2 行 → 期望 200，`principal` 为该 agent 的 id（每个 agent 不同）。
+> 结论：R1–R8 已在线上全链路验证通过；`principal` 为各 agent 自身（`prodvm1` / `self-host-apps`），未收敛。
 
-## 5.1 当前阻塞（平台侧，2026-11-27）
+## 5.1 已知坑（已解决 / 待平台处理）
 
-Agent 容器无法解析到平台入口：
+**已解决**：agent 容器曾把 `app.prod.localtest.me` 解析到自身回环（`::1`），导致 502。
+平台已给 `prodvm1`、`self-host-apps` 注入 hosts 映射后链路恢复。
+`vuln` pod 仍未注入（仍是 `::1`），同类问题会复现。
 
-- agent VM 的 `/etc/hosts` 有 `::1 app.prod.localtest.me`，容器内 DNS 继承后指向自身回环；
-- nginx 严格校验 SNI，用 IP 直连会握手失败；
-- 实测：容器加 `--add-host app.prod.localtest.me:169.254.1.2` 后同一请求返回 401（入口可达）。
+**路径语义（重要）**：Edge 用 `joinUpstream(baseUrl, path)` **直接拼接**，
+凭据 `app.moot` 的 `baseUrl` 已含 `/agent-api/moot`。因此容器内调用必须是**相对 App 的路径**：
 
-**需要平台做**：给 agent pod / Edge 注入入口 hosts 映射（如 `169.254.1.2 app.prod.localtest.me auth.prod.localtest.me`），
-或提供 agent 网络内可达的内部入口地址。之后按 §6 复测。
+```text
+http://127.0.0.1:18090/whoami   →  https://app.../agent-api/moot/whoami  ✅
+http://127.0.0.1:18090/agent-api/moot/whoami
+                                →  .../agent-api/moot/agent-api/moot/whoami  ❌（APISIX 只剥一层 → moot 收到 /agent-api/moot/whoami）
+```
 
 ## 6. 验收清单（授权后执行）
 
@@ -108,11 +114,11 @@ Agent 容器无法解析到平台入口：
 curl -s http://127.0.0.1:18090/_agentsafe/identity -X POST -d '{}'
 
 # 2) 经 Edge 访问 moot（占位凭据）
-curl -s http://127.0.0.1:18090/agent-api/moot/whoami \
+curl -s http://127.0.0.1:18090/whoami \
   -H "Authorization: Bearer as2_app.moot"
 
 # 3) MCP 握手
-curl -s http://127.0.0.1:18090/agent-api/moot/mcp \
+curl -s http://127.0.0.1:18090/mcp \
   -H "Authorization: Bearer as2_app.moot" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
@@ -120,10 +126,11 @@ curl -s http://127.0.0.1:18090/agent-api/moot/mcp \
 
 期望：
 
-- [ ] `/whoami` 返回 `identity_type=agent`，`principal` 等于该 agent 的 id
-- [ ] 两个不同 agent 分别调用，`principal` **不同**（不收敛）
-- [ ] `tools/list` 返回 19 个工具
-- [ ] 未授权的 agent 得到 403 + `approval_url`（而不是被静默合并）
+- [x] `/whoami` 返回 `identity_type=agent`，`principal` 等于该 agent 的 id
+- [x] 两个不同 agent 分别调用，`principal` **不同**（不收敛）
+- [x] `tools/list` 返回 19 个工具
+- [x] 未授权的 agent 得到 403 + `approval_url`（而不是被静默合并）
+- [x] issue 全流程 + SSE 事件投递（2026-11-27）
 
 ## 7. 兼容说明：旧的 per-agent Keycloak client
 

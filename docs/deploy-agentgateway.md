@@ -137,7 +137,7 @@ curl -sk -H "Authorization: Bearer $TOKEN" \
 平台在 Edge 侧为**当前 agent** 签发专属短期 JWT（`sub` / `principal_id` / `owner_id` /
 `aud=apisix-app-moot`），因此：
 
-- 容器内推荐：`http://127.0.0.1:18090/agent-api/moot/*` + 占位凭据 `Authorization: Bearer as2_app.moot`
+- 容器内推荐：`http://127.0.0.1:18090/*` + 占位凭据 `Authorization: Bearer as2_app.moot`（**路径相对 App**：`/mcp`、`/whoami`、`/events`；不要带 `/agent-api/moot` 前缀，否则会双前缀）
 - 不同 agent 天然是不同的 `principal_id`，**不会收敛**，moot 首次调用自动登记为同名项目
 - 唯一前置条件：人类管理员在控制台给该 agent（或其组织节点）授权 `app.moot`；
   未授权时返回 `403 credential_not_granted` + `approval_url`

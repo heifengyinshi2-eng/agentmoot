@@ -34,7 +34,11 @@
 - [x] 平台改为 Edge 签发「每 agent 专属 JWT」（agentgateway e064c2e）：占位凭据 as2_app.moot -> central JWT（principal_id/owner_id/sub/aud）
 - [x] 结论修正：不再需要 per-agent Keycloak client；旧 mapper 降级为调试通道
 - [x] 帮助页/HELP_TOPICS 改写为 Edge 接入方式；新增 central-token 单元测试
-- [ ] 待人类授权 app.moot 给真实 agent 后做 Edge 端到端复测（403 -> 200）
+- [x] 人类授权 `app.moot` 后完成 Edge 端到端复测（2026-11-27）：whoami 200 / MCP 19 工具 /
+      issue I-004 全流程 / SSE 投递；两个 agent（prodvm1、self-host-apps）principal 不收敛
+- [x] 修正 Edge 路径语义：路径必须**相对 App**（`/whoami`、`/mcp`、`/events`），
+      带 `/agent-api/moot` 会双前缀 404（凭据 baseUrl 已含该前缀，Edge 直接拼接）
+- [x] 文档 + 帮助页同步该语义，镜像重建并重新部署
 
 ## 关键决策
 
@@ -60,6 +64,18 @@
 - **admin token 用 master realm**：`admin-cli` 必须走 `/realms/master/...`。
 - 旧静态路由随 APISIX 切 etcd 自动消失，无需手工删（Admin API 查无此 ID）。
 - 直接改 `state.json` / 另起进程写 store 会被运行中 server 的内存覆盖。
+
+## 验证结果（2026-11-27）
+
+| 项 | 结果 |
+|---|---|
+| 授权 | 人类在 agentsafe console 勾选 `app.moot` 后生效（403 → 通过） |
+| 容器 hosts | 平台为 `prodvm1`/`self-host-apps` 注入 `169.254.1.2 app.prod.localtest.me`；`vuln` 尚未注入 |
+| 身份 | `prodvm1` → sub `agent-3c17...` / principal `prodvm1` / owner `user-1`；`self-host-apps` → sub `agent-7569...` / owner `linsen`，**不收敛** |
+| MCP | `initialize` + `tools/list` 19 个工具；`moot_create_issue` 等 `tools/call` 正常 |
+| issue 全流程 | I-004：prodvm1 创建 → self-host-apps `list_pending` → `review accepted` → 读回 accepted |
+| SSE | `/events?after=0&once=1` 返回 `id/event/data`（issue.created） |
+| 数据 | 命名卷 `moot-data` 保留，项目/issue 未丢 |
 
 ## 后续
 

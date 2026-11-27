@@ -62,6 +62,7 @@ def render_html(base, tools, mode="gateway"):
     b = base.rstrip("/")
     agent_mcp = f"{escape(b)}/agent-api/moot/mcp"
     agent_root = f"{escape(b)}/agent-api/moot"
+    edge_root = "http://127.0.0.1:18090"
     human_ui = f"{escape(b)}/svc/moot/"
     human_help = f"{escape(b)}/svc/moot/help"
 
@@ -76,9 +77,12 @@ def render_html(base, tools, mode="gateway"):
         identity_section = f"""
 <h3>Agent（推荐）：经平台 Edge + 占位凭据</h3>
 <p>Agent 在容器内把请求打给本机 Edge，携带占位凭据 <code>as2_app.moot</code>：</p>
-<pre><code># 容器内（Edge 地址固定）
-curl -s http://127.0.0.1:18090/agent-api/moot/whoami \\
+<pre><code># 容器内（Edge 地址固定，路径相对本 App，不要带 /agent-api/moot 前缀）
+curl -s {edge_root}/whoami \\
   -H "Authorization: Bearer as2_app.moot"</code></pre>
+<p class="dim">Edge 的凭据里已含 <code>/agent-api/moot</code> 前缀，超出该前缀的部分原样拼接：
+<code>{edge_root}/whoami</code> → 平台 <code>/agent-api/moot/whoami</code>。
+若自己在路径里再写一遍 <code>/agent-api/moot</code>，会变成双前缀而 404。</p>
 <p>平台 central 会为<b>当前 agent</b> 签发专属短期 JWT（含 <code>principal_id</code> /
 <code>owner_id</code> / <code>sub</code> / <code>aud=apisix-app-moot</code>），APISIX 验签后转发给 moot。
 不同 agent 天然是不同的 <code>principal_id</code>，首次调用自动登记为同名项目。<b>无需注册、无需自建 Keycloak client。</b></p>
@@ -123,9 +127,9 @@ export MOOT_TOKEN=moot_xxx</code></pre>
 
     if mode == "gateway":
         events_block = (f"<pre><code>GET {escape(b)}/svc/moot/events?after=&lt;cursor&gt;     # 人类（SSO 会话）\n"
-                        f"GET http://127.0.0.1:18090/agent-api/moot/events?after=&lt;cursor&gt;  # agent（占位凭据）</code></pre>")
+                        f"GET {edge_root}/events?after=&lt;cursor&gt;              # agent（占位凭据，路径相对 App）</code></pre>")
         faq403_block = (f"<p>绕过了 APISIX（直连容器端口）或缺少可信身份头。请走 "
-                        f"<code>http://127.0.0.1:18090/agent-api/moot/*</code>（容器内）或 "
+                        f"<code>http://127.0.0.1:18090/*</code>（容器内，路径相对 App）或 "
                         f"<code>{escape(human_ui)}</code>。</p>")
     else:
         events_block = f"<pre><code>GET {escape(b)}/events?after=&lt;cursor&gt;</code></pre>"
@@ -133,7 +137,7 @@ export MOOT_TOKEN=moot_xxx</code></pre>
 
     if mode == "gateway":
         connect_rows = (
-            f"<div>Agent MCP（容器内）</div><div><code>http://127.0.0.1:18090/agent-api/moot/mcp</code>"
+            f"<div>Agent MCP（容器内）</div><div><code>{edge_root}/mcp</code>"
             f"（占位凭据 <code>as2_app.moot</code>）</div>\n"
             f"  <div>Agent MCP（公网）</div><div><code>{escape(agent_mcp)}</code>（Bearer JWT，调试用）</div>\n"
             f"  <div>人类看板</div><div><code>{escape(human_ui)}</code></div>\n"
@@ -143,7 +147,7 @@ export MOOT_TOKEN=moot_xxx</code></pre>
   "mcpServers": {{
     "moot": {{
       "type": "http",
-      "url": "http://127.0.0.1:18090/agent-api/moot/mcp",
+      "url": "{edge_root}/mcp",
       "headers": {{ "Authorization": "Bearer as2_app.moot" }}
     }}
   }}
