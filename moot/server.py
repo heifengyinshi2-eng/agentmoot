@@ -21,6 +21,10 @@ from . import gateway_identity
 AUTH_MODE = os.environ.get("MOOT_AUTH_MODE", "token").strip().lower()
 GATEWAY_CFG = gateway_identity.GatewayConfig.from_env()
 
+# SSE 参数：轮询事件日志的间隔，以及无事件时发注释心跳的间隔（防被中间层/客户端判定空闲断开）
+EVENT_POLL_INTERVAL = float(os.environ.get("MOOT_EVENT_POLL_INTERVAL", "0.5"))
+HEARTBEAT_INTERVAL = float(os.environ.get("MOOT_EVENT_HEARTBEAT_INTERVAL", "15"))
+
 
 class MootHandler(BaseHTTPRequestHandler):
     """每个请求一个线程；store 与 lock 由 serve() 注入，串行化访问保证并发安全。"""
@@ -442,8 +446,10 @@ class MootHandler(BaseHTTPRequestHandler):
         except (ValueError, TypeError):
             after = 0
         self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        # 告诉 nginx/APISIX 不要缓冲：否则 SSE 会被攒包，客户端看不到首包与心跳
+        self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
 
         def emit(ev):
@@ -452,7 +458,14 @@ class MootHandler(BaseHTTPRequestHandler):
             self.wfile.write(msg.encode("utf-8"))
             self.wfile.flush()
 
+        def comment(text):
+            """SSE 注释行：不触发事件，只用于尽快确认建连与保活。"""
+            self.wfile.write(f": {text}\n\n".encode("utf-8"))
+            self.wfile.flush()
+
         last_seq = after
+        # 立即回一个首包，让客户端立刻从「等响应头」进入 connected
+        comment("connected")
         try:
             for ev in self._read_events():
                 if ev["seq"] <= last_seq:
@@ -464,10 +477,13 @@ class MootHandler(BaseHTTPRequestHandler):
                 with self.lock:
                     self.store.set_cursor(project, last_seq)
             if once:
+                self.close_connection = True
                 return
             # 实时 tail：轮询 events.jsonl 新追加的行（标准库无 inotify）
+            # 定期发注释心跳，避免中间层（nginx/APISIX/客户端）因长时间无数据而断开
+            last_beat = time.time()
             while True:
-                time.sleep(0.5)
+                time.sleep(EVENT_POLL_INTERVAL)
                 new = [e for e in self._read_events() if e["seq"] > last_seq]
                 for ev in new:
                     last_seq = ev["seq"]
@@ -476,6 +492,10 @@ class MootHandler(BaseHTTPRequestHandler):
                 if new:
                     with self.lock:
                         self.store.set_cursor(project, last_seq)
+                    last_beat = time.time()
+                elif time.time() - last_beat >= HEARTBEAT_INTERVAL:
+                    comment(f"ping {int(time.time())}")
+                    last_beat = time.time()
         except (BrokenPipeError, ConnectionResetError):
             pass  # 客户端断开
 
@@ -557,6 +577,8 @@ HELP_TOPICS = {
 - 事件类型：project.registered、issue.created/reviewed/resolved/closed/commented、room.created/submitted/judged/revised/finalized
 - 每条事件带 seq（单调递增）；`after=N` 从游标 N 之后重放，支持断点续传
 - 通知目标：issue → assignee + creator；room → participants + chair
+- 应答：建连即返回 `200` + `Content-Type: text/event-stream` + `X-Accel-Buffering: no`，
+  并立即发一行注释 `: connected`；无事件时每 15s 发 `: ping <ts>` 心跳（客户端忽略 `:` 开头行）
 - 语义：at-least-once（可重复、可丢）；**正确性不依赖通知**，权威状态由 `moot_list_pending` 拉取保证
 
 现状（重要）：当前 agent 是 `pi -p` 一次性运行，**没有常驻订阅 SSE 的能力**；`/events` 是为将来常驻 agent 预留的唤醒通道。现阶段 agent 上线先无条件调一次 `moot_list_pending` 即可。""",

@@ -113,6 +113,44 @@ class TestEvents(unittest.TestCase):
         # 直接读 state 文件确认 cursor 被写入（>= 最后 seq）
         self.assertGreaterEqual(store.get_cursor("base"), 0)
 
+    def test_headers_and_immediate_connected_comment(self):
+        """建连后应立刻发出响应头与首包（SSE comment），且声明不被中间层缓冲。"""
+        url = f"{self.base}/events?project=base&after=0&once=1"
+        resp = urllib.request.urlopen(url, timeout=10)
+        try:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("text/event-stream", resp.headers.get("Content-Type", ""))
+            self.assertEqual(resp.headers.get("X-Accel-Buffering"), "no")
+            self.assertIn("no-transform", resp.headers.get("Cache-Control", ""))
+            first = resp.readline().decode("utf-8")
+            self.assertEqual(first.strip(), ": connected")
+        finally:
+            resp.close()
+
+    def test_heartbeat_comment_keeps_stream_alive(self):
+        """无事件时按心跳间隔发 SSE comment，防止中间层/客户端判定空闲断开。"""
+        import moot.server as srv
+        old_poll, old_beat = srv.EVENT_POLL_INTERVAL, srv.HEARTBEAT_INTERVAL
+        srv.EVENT_POLL_INTERVAL, srv.HEARTBEAT_INTERVAL = 0.05, 0.25
+        try:
+            url = f"{self.base}/events?project=base&after=999999"  # 从尾部开始，不会重放旧事件
+            resp = urllib.request.urlopen(url, timeout=10)
+            lines = []
+            deadline = time.time() + 2.0
+            try:
+                while time.time() < deadline:
+                    line = resp.readline().decode("utf-8").strip()
+                    if line:
+                        lines.append(line)
+                    if any(l.startswith(": ping") for l in lines):
+                        break
+            finally:
+                resp.close()
+            self.assertTrue(any(l == ": connected" for l in lines), lines)
+            self.assertTrue(any(l.startswith(": ping") for l in lines), lines)
+        finally:
+            srv.EVENT_POLL_INTERVAL, srv.HEARTBEAT_INTERVAL = old_poll, old_beat
+
 
 if __name__ == "__main__":
     unittest.main()

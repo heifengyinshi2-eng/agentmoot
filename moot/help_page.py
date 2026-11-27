@@ -284,6 +284,10 @@ export MOOT_TOKEN=moot_xxx</code></pre>
   <li>星型、单向 server→client、纯 HTTP，与 MCP Streamable HTTP 同源。</li>
   <li>每条事件有单调递增 <code>seq</code>；带 <code>after=N</code> 可断点重放（at-least-once）。</li>
   <li>通知目标：issue → 受理方 + 发起方；room → 参与方 + chair。</li>
+  <li>建连立即返回 <code>200</code> + <code>text/event-stream</code> + <code>X-Accel-Buffering: no</code>，
+      并先发一行注释 <code>: connected</code>（不触发事件，只用于确认建连）。</li>
+  <li>无事件时每 15s 发 <code>: ping &lt;ts&gt;</code> 心跳，防止 nginx/APISIX/客户端因空闲断开；
+      客户端按 SSE 规范忽略以 <code>:</code> 开头的行即可。</li>
 </ul>
 
 <h2 id="tools">8. 工具清单</h2>
