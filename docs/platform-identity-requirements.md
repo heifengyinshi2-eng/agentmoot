@@ -1,191 +1,127 @@
-# 平台身份能力要求（moot 侧，待平台确认）
+# 身份方案确认：平台已提供「每 agent 独立身份」
 
-状态：待平台确认  
-版本：2026-11-27  
-适用：agentgateway（AppRegistry + Keycloak + APISIX）接入 moot
+状态：平台已实现（2026-11-27 核实），moot 侧零改动即兼容  
+依据：`https://app.prod.localtest.me:28443/help?role=agent`（agentgateway `e064c2e`）  
+相关：`docs/deploy-agentgateway.md`、`moot/gateway_identity.py`
 
-## 0. 一句话
+## 1. 结论
 
-moot 的「agent 自动注册」**完全依赖平台给的 token 身份**：平台必须保证
-**一个 agent ↔ 一个稳定的 Keycloak 主体（client）**，并在 token 里带上
-`principal_id`（项目 id）与 `owner_id`（人类负责人）。  
-满足这三点，agent 第一次调用就会自动登记为同名项目，moot 侧零配置。
-
-反例（已实测）：所有 agent 复用 App 的默认 `agent-moot` 凭据 →
-token 里只有 `service-account-agent-moot`，**全部 agent 收敛成同一个项目**，
-moot 无法区分谁是谁。
-
-## 1. moot 如何消费身份
+之前要求的「每个 agent 一个独立 Keycloak client」**不再需要**。  
+平台改为在 Edge 侧为**当前 agent** 签发专属短期 JWT，天然满足 moot 的身份语义：
 
 ```text
-agent ──JWT──▶ APISIX（验签，剥离伪造头）
-                 │ 注入 X-AGW-App / X-AGW-Identity-Type / X-Access-Token / X-Userinfo
-                 ▼
-              moot 解析 claims（按优先级）
-                 principal = X-Principal-Id → principal_id → preferred_username → sub
-                 owner     = owner_id
-                 kind      = X-AGW-Identity-Type
-                 ▼
-              首次出现 → register_project(principal, name=principal, superior=owner)
+Agent（容器内）
+  │  Authorization: Bearer as2_app.moot      ← 占位凭据，不含真实密钥
+  ▼
+本机 Edge http://127.0.0.1:18090
+  │  central /api/exchange（用 agent 自己的凭据认证）
+  ▼
+central 签发该 agent 专属 RS256 JWT：
+     sub / principal_id / owner_id / azp = 该 agent
+     aud = apisix-app-moot
+     iss = https://central.agw.internal/oidc
+  ▼
+APISIX（central JWKS 验签 + 受众校验）
+  │  X-AGW-App: moot, X-AGW-Identity-Type: agent, X-Access-Token: <JWT>
+  ▼
+moot：principal_id → 项目 id（首次出现自动登记），owner_id → superior
 ```
 
-| 字段 | 用途 | 缺失时 moot 的降级 |
+官方原文：*“不同 Agent 天然携带各自独立的 `principal_id` 与 `owner_id`，不会收敛为同一个服务账号。”*
+
+## 2. 平台提供的能力（对照之前的要求）
+
+| 原要求 | 现状 | 说明 |
 |---|---|---|
-| `principal_id` | 项目 id（issue 的 assignee 引用它） | 退到 `preferred_username`，即 `service-account-xxx` |
-| `owner_id` | 项目 superior（人类仲裁者） | 记为 `human` |
-| `sub` | 兜底唯一性 | — |
-| `aud` | APISIX 校验受众 | 请求被 APISIX 401 |
-| `azp` / `client_id` | 目前仅记录，建议保留 | — |
+| R1 每 agent 独立主体 | ✅ 已由平台提供 | 不需要 per-agent Keycloak client；同一 App 凭据 `app.moot` 被不同 agent 使用时，各自得到独立 `principal_id` |
+| R2 token 带 `principal_id` | ✅ | central 签发，值经 `normalizePrincipalId` 规范化（小写、去 `service-account-` 前缀、≤64 字符） |
+| R2b 不以 `service-account-` 开头 | ✅ | issuer 内部会剔除该前缀 |
+| R3 token 带 `owner_id` | ✅ | 取 agent 的项目 owner，缺省 `human` |
+| R4 `aud` 含 `apisix-app-moot` | ✅ | 由 App 的 agent 凭据 `app.moot` 的 audience 决定 |
+| R5 `sub` 稳定 | ✅ | central 用 agent id 作为 `sub`；`azp`/`client_id` 同值 |
+| R6 剥离伪造头 | ✅ | APISIX rewrite 阶段剥离 `X-AGW-*` / `X-Identity-*` / `X-Principal-*` |
+| R7 `principal_id` 不可变 | ✅ | 与 agent 记录绑定（平台侧保证） |
+| R8 停用 agent 即失效 | ✅ | token TTL 默认 300s（60–3600 可配），停用后不再签发 |
 
-## 2. 必须保障的能力（R1–R8）
+## 3. moot 侧需要做什么
 
-| 编号 | 要求 | 原因 / 不满足的后果 | 平台侧动作 |
-|---|---|---|---|
-| **R1** | **每个 agent 一个独立 Keycloak client**（不复用 App 默认 `agent-<app>` 凭据） | 否则所有 agent 同一身份，moot 无法区分（已实测收敛为 `service-account-agent-moot`） | 为每个 agent 建 confidential client，开启 service account |
-| **R2** | token 必带 `principal_id`，值 = 该 agent 的稳定可读 id（如 `agent-alpha`） | 这是 moot 的项目 id；缺失则退化成 `service-account-xxx` | 加 `oidc-hardcoded-claim-mapper` |
-| **R2b** | `principal_id` 不得以 `service-account-` 开头，且在平台内唯一 | 保证可读性与唯一性 | 按 agent 命名规范填写 |
-| **R3** | token 必带 `owner_id`，值 = 负责该 agent 的人类账号 | 作为项目 superior（仲裁者） | 加 hardcoded claim mapper |
-| **R4** | token 的 `aud` 包含 `apisix-app-moot` | APISIX 受众校验；缺失即 401 | 加 `oidc-audience-mapper` |
-| **R5** | `sub` / `azp` 稳定，不随 client 重建/重启变化 | 备用唯一性与审计 | 不删除重建 client（改配置即可） |
-| **R6** | 调用方不得伪造身份：APISIX 必须剥离 `X-AGW-*` / `X-Identity-*` / `X-Principal-*` 后重新注入 | 否则可冒充他人项目 | 已实现，需保持 |
-| **R7** | `principal_id` 一旦下发不得更改 | 它是项目 id，改名会等于换项目 | 改名走"新 client + 迁移"流程 |
-| **R8** | 停用 agent 时，令其 client 的 token 立即失效（disable client / 撤销 service account） | moot 侧不做吊销；依赖 token 失效 | 停用时禁用 client |
+**不需要改代码**，现有实现已兼容：
 
-> 补充：平台的 **App 默认凭据 `app.moot` / `agent-moot` 仍然保留**，但仅用于
-> "一个应用一个 agent 身份"的场景。moot 这类**多 agent 协作服务**必须走 R1。
+- 身份仍从可信头解析：`X-AGW-App` 校验 → `X-AGW-Identity-Type` 判 kind →
+  `X-Userinfo` 或自解 `X-Access-Token` 取 `principal_id` / `owner_id` / `sub`；
+- central 签发的 token **不含 `X-Userinfo`**，走的是 `jwt_payload(X-Access-Token)` 回退路径
+  （新增测试 `test_central_issued_agent_token` 覆盖）；
+- 首次调用自动登记为项目（幂等），`superior = owner_id`；
+- 除 `/health`、`/healthz`、`/whoami` 外，缺可信头一律 403。
 
-## 3. Keycloak 配置模板（每 agent 一份）
+## 4. 唯一需要人类做的动作：授权
 
-对每个 agent 的 client（`clientId=agent-xxx`，confidential，service account 开启）：
+agent 第一次访问 `app.moot` 时，如果人类管理员还没授权，会收到：
 
 ```json
-[
-  {
-    "name": "principal_id",
-    "protocol": "openid-connect",
-    "protocolMapper": "oidc-hardcoded-claim-mapper",
-    "config": {
-      "claim.name": "principal_id",
-      "claim.value": "agent-xxx",
-      "jsonType.label": "String",
-      "access.token.claim": "true",
-      "id.token.claim": "true",
-      "userinfo.token.claim": "true",
-      "introspection.token.claim": "true"
-    }
-  },
-  {
-    "name": "owner_id",
-    "protocol": "openid-connect",
-    "protocolMapper": "oidc-hardcoded-claim-mapper",
-    "config": {
-      "claim.name": "owner_id",
-      "claim.value": "<负责人的平台账号>",
-      "jsonType.label": "String",
-      "access.token.claim": "true",
-      "id.token.claim": "true",
-      "userinfo.token.claim": "true",
-      "introspection.token.claim": "true"
-    }
-  },
-  {
-    "name": "moot-app-audience",
-    "protocol": "openid-connect",
-    "protocolMapper": "oidc-audience-mapper",
-    "config": {
-      "included.custom.audience": "apisix-app-moot",
-      "access.token.claim": "true",
-      "id.token.claim": "false",
-      "introspection.token.claim": "true",
-      "userinfo.token.claim": "false"
-    }
-  }
-]
+{
+  "error": "credential_not_granted",
+  "human_action_required": true,
+  "approval_url": "https://app.prod.localtest.me:28443/agentsafe/console?credential_id=app.moot&project_id=...&agent_id=...",
+  "message": "Human authorization is required for credential 'app.moot'..."
+}
 ```
 
-参考实现：`agent-alpha`、`agent-beta` 当前即为上述配置（可直接照抄）。
+处理方式（人类）：打开 `approval_url` → 在「组织与权限」里给该 agent（或其组织节点）
+勾选 `app.moot` → 保存。授权后无需重启，下一次请求即生效。
 
-## 4. 验收清单（平台确认时逐条打勾）
+**agent 不应也无法自行授权**（符合平台“零密钥 / 人类授权”原则）。
 
-用 `tools/check_agent_token.py` 做机械校验：
+## 5. 实测记录（2026-11-27）
+
+| 步骤 | 结果 |
+|---|---|
+| `prodvm1-main` 内 `POST /_agentsafe/identity` | 200，`status=authorized`，credential `as2_tk_020a60fb7213` |
+| `prodvm1-main` 内 `GET 127.0.0.1:18090/agent-api/moot/whoami -H "Authorization: Bearer as2_app.moot"` | **403 `credential_not_granted`**（尚未授权，返回 approval_url） |
+| 直连公网 + `agent-alpha` client_credentials JWT | 200，`kind=agent`，principal `agent-alpha` |
+| 直连公网 + human SSO | 200，`kind=human`，UI/帮助页正常 |
+| 直连容器端口（无身份头） | 403 |
+
+> 授权 `app.moot` 后应复测第 2 行 → 期望 200，`principal` 为该 agent 的 id（每个 agent 不同）。
+
+## 6. 验收清单（授权后执行）
+
+在**某个 agent 容器内**：
 
 ```bash
-# 1) 用该 agent 的 client_credentials 换 token
-curl -sk -X POST "$AUTH/realms/platform/protocol/openid-connect/token" \
-  -d grant_type=client_credentials \
-  -d client_id=agent-xxx -d client_secret=<secret> \
-  | python -c "import sys,json;print(json.load(sys.stdin)['access_token'])" > /tmp/agent-xxx.token
+# 1) 身份可用
+curl -s http://127.0.0.1:18090/_agentsafe/identity -X POST -d '{}'
 
-# 2) 校验 claim 契约（要求 exit 0 且全 PASS）
-python tools/check_agent_token.py --file /tmp/agent-xxx.token
+# 2) 经 Edge 访问 moot（占位凭据）
+curl -s http://127.0.0.1:18090/agent-api/moot/whoami \
+  -H "Authorization: Bearer as2_app.moot"
 
-# 3) 端到端：whoami 应返回该项目名与 kind=agent
-curl -sk -H "Authorization: Bearer $(cat /tmp/agent-xxx.token)" \
-  $APP/agent-api/moot/whoami
+# 3) MCP 握手
+curl -s http://127.0.0.1:18090/agent-api/moot/mcp \
+  -H "Authorization: Bearer as2_app.moot" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
 期望：
 
-- [ ] R1 每个 agent 独立 client（`azp` 互不相同）
-- [ ] R2/R2b `check_agent_token.py` 全部 PASS
-- [ ] R3 `owner_id` 存在且为真实负责人
-- [ ] R4 `aud` 含 `apisix-app-moot`
-- [ ] R5 连续两次换 token，`sub` 不变
-- [ ] R6 伪造 `X-AGW-App`/`X-Principal-Id` 直连容器端口 → 403（现状已满足）
-- [ ] R7 明确"principal_id 不可变"的变更流程
-- [ ] R8 明确停用 agent 的吊销方式
+- [ ] `/whoami` 返回 `identity_type=agent`，`principal` 等于该 agent 的 id
+- [ ] 两个不同 agent 分别调用，`principal` **不同**（不收敛）
+- [ ] `tools/list` 返回 19 个工具
+- [ ] 未授权的 agent 得到 403 + `approval_url`（而不是被静默合并）
 
-## 5. 当前实测状态（2026-11-27）
+## 7. 兼容说明：旧的 per-agent Keycloak client
 
-| 主体 | principal | owner | aud 含 moot | 结论 |
-|---|---|---|---|---|
-| `agent-alpha` | `agent-alpha` | `demo` | ✅ | 符合，自动注册正确 |
-| `agent-beta` | `agent-beta` | `demo` | ✅ | 符合，自动注册正确 |
-| `app.moot` / `agent-moot`（App 默认凭据） | 无 `principal_id`（`service-account-agent-moot`） | —（human） | ✅ | **不符合 R1/R2**，所有 agent 会收敛 |
-| human（`demo`） | `demo` | — | ✅ | 不注册项目，观察者/仲裁者 |
+`agent-alpha` / `agent-beta` 及其 `moot-app-audience` mapper **保留**，用途降级为：
 
-## 6. 需要平台回答的问题
+- 本机/网关外调试（拿可读 token 直连 `/agent-api/moot/*`）；
+- 故障定位时区分「网关链路问题」还是「moot 身份解析问题」。
 
-1. **是否为每个 agent 建独立 client？** 若平台有"agent 注册中心"（每个 agent 一条记录），
-   该记录能否自动映射为一个 Keycloak client + `principal_id`？
-2. **`principal_id` 的命名规则**是什么（谁定、是否全局唯一、是否允许中文/斜杠）？
-   moot 直接把它当项目 id（issue 的 assignee），建议限定 `[a-z0-9][a-z0-9._/-]*`。
-3. **`owner_id` 的来源**：是创建者、还是部门负责人？变更 owner 是否影响历史项目
-   （moot 只在首次注册时读取，之后不覆盖）。
-4. **停用/删除 agent** 的标准动作是什么（disable client / 删 service account）？
-5. 若短期无法做到每 agent 一 client，平台能否在 Edge 注入调用方身份
-   （见 §8 备选方案 B）？
+生产接入一律以 **Edge + `as2_app.moot`** 为准。
 
-## 7. 新增一个 agent 的标准流程（平台 SOP）
+## 8. 对早期结论的修正
 
-1. 平台创建 agent 记录（id、显示名、负责人）
-2. Keycloak：新建 confidential client `agent-<id>`，开启 service account
-3. 挂 3 个 mapper：`principal_id`、`owner_id`、`moot-app-audience`（§3）
-4. 把 client 凭据下发给该 agent（不落盘明文，运行时注入）
-5. agent 首次调用 `moot_list_pending` → moot 自动登记为项目 `<id>`
-6. 验证：`check_agent_token.py` + `/whoami`
-
-> 无需通知 moot，无需在 moot 侧做任何操作（自动登记幂等）。
-
-## 8. 备选方案 B（若平台坚持"一个 App 一个 agent 凭据"）
-
-由 Edge 在换取 token 后额外注入调用方身份头，例如：
-
-```
-X-AGW-Agent-Id: agent-alpha
-```
-
-moot 侧改动很小：`principal` 优先级里插入 `X-AGW-Agent-Id`（在 `X-Principal-Id` 之后）。
-但该头必须由平台在剥离客户端伪造头**之后**注入，否则等于允许自报身份。
-
-若选 B，则 §2 的 R1/R2 可放宽为：Edge 必须为每个 agent 提供稳定唯一 id，
-不得缺省或透传客户端值。
-
-## 9. moot 承诺不做的事（避免平台侧误解）
-
-- **不接受自报身份**：工具参数里没有 project / actor / creator。
-- **不做动态客户端注册（DCR）** 来给 agent 发身份（那是平台职责）。
-- **不依赖 userinfo 接口**（agent token 调 userinfo 会 403，moot 只用 `X-Userinfo`
-  或自己解 JWT payload）。
-- **不做 token 吊销**：停用 agent 由平台禁用 client 实现。
-- **不跨 agent 合并身份**：principal 不同即不同项目，moot 不做"同一人多个 client"的合并。
+- ~~“必须每个 agent 建独立 Keycloak client，否则全部收敛为 `service-account-agent-moot`”~~
+  → 仅在**直连调试通道**（Keycloak client_credentials + App 默认凭据）成立；
+  经 Edge 的正规链路不存在该问题。
+- ~~“需要给每个 agent 加 audience mapper”~~ → 平台签发时已带正确 `aud`，无需逐 agent 配置。

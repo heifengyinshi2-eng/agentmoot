@@ -88,8 +88,7 @@ curl -sk "$ADMIN/apps/moot/status" -H "Authorization: Bearer $ADMIN_TOKEN"
 | APISIX 路由 | `agw-app-moot-oauth2` / `-human` / `-agent`，经 Admin API 写入 etcd |
 | 容器 `svc-moot` | 仅接 `agw-app`，健康检查 `GET /healthz` |
 
-## 4. 身份契约
-APISIX 在 rewrite 阶段剥离客户端伪造的 `X-AGW-*` / `X-Identity-*` / `X-Principal-*`，
+## 4. 身份契约APISIX 在 rewrite 阶段剥离客户端伪造的 `X-AGW-*` / `X-Identity-*` / `X-Principal-*`，
 再注入：
 
 | 头 | 值 |
@@ -133,28 +132,22 @@ curl -sk -H "Authorization: Bearer $TOKEN" \
 - 直连端口 `/projects`、`/mcp` → 403
 - 帮助页 `…/svc/moot/help` → 200（HTML）；`help.md` / `help.json` 同路径可换格式
 
-## 6. 多 Agent 身份（重要）
+## 6. 多 Agent 身份（平台已内建）
 
-平台默认的 `agent.moot` 凭据（`app.moot`）换出的 token 是 **App 的 agent client**，
-`preferred_username = service-account-agent-moot` —— 所有 agent 会收敛成同一个 principal。
+平台在 Edge 侧为**当前 agent** 签发专属短期 JWT（`sub` / `principal_id` / `owner_id` /
+`aud=apisix-app-moot`），因此：
 
-moot 需要“每个 agent 独立身份”，因此**参与协作的 agent 需要各自具备
-`aud=apisix-app-moot`**。做法（幂等，经 Keycloak Admin API）：
+- 容器内推荐：`http://127.0.0.1:18090/agent-api/moot/*` + 占位凭据 `Authorization: Bearer as2_app.moot`
+- 不同 agent 天然是不同的 `principal_id`，**不会收敛**，moot 首次调用自动登记为同名项目
+- 唯一前置条件：人类管理员在控制台给该 agent（或其组织节点）授权 `app.moot`；
+  未授权时返回 `403 credential_not_granted` + `approval_url`
 
-```text
-给 agent client 加 oidc-audience-mapper：
-  included.custom.audience = apisix-app-moot
-  access.token.claim = true
-```
+**旧的 per-agent Keycloak client 方案已降级为“直连调试通道”**：
+`agent-alpha` / `agent-beta` 及 `moot-app-audience` mapper 保留，用于拿可读 token 直接
+访问 `/agent-api/moot/*`（不经 Edge）。生产接入不需要逐 agent 配置。
 
-当前已给 `agent-alpha`、`agent-beta` 配置（mapper 名 `moot-app-audience`），
-它们用自己的 client_credentials token 直接访问 `/agent-api/moot/*` 即可。
-
-> 若走平台 Edge 的 `as2_app.moot` 方式，身份只会是 `service-account-agent-moot`，
-> 不适合 moot 的多 agent 语义。取舍见 `plans/agentgateway-deploy.md`。
->
-> **完整要求与验收清单见 [`platform-identity-requirements.md`](platform-identity-requirements.md)**
-> （R1–R8；平台侧逐条确认）。机械校验：`python tools/check_agent_token.py --file <token>`。
+> 完整说明与验收清单见 [`platform-identity-requirements.md`](platform-identity-requirements.md)。
+> 机械校验直连 token：`python tools/check_agent_token.py --file <token>`。
 
 ## 7. 已知问题 / 限制
 

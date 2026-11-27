@@ -31,6 +31,10 @@
 - [x] 定案：每 agent 一个 Keycloak client（方案 1）；输出 `docs/platform-identity-requirements.md`
       （R1–R8 + 验收清单 + Keycloak mapper 模板），待平台确认
 - [x] `tools/check_agent_token.py`：机械校验 token 是否满足身份契约
+- [x] 平台改为 Edge 签发「每 agent 专属 JWT」（agentgateway e064c2e）：占位凭据 as2_app.moot -> central JWT（principal_id/owner_id/sub/aud）
+- [x] 结论修正：不再需要 per-agent Keycloak client；旧 mapper 降级为调试通道
+- [x] 帮助页/HELP_TOPICS 改写为 Edge 接入方式；新增 central-token 单元测试
+- [ ] 待人类授权 app.moot 给真实 agent 后做 Edge 端到端复测（403 -> 200）
 
 ## 关键决策
 

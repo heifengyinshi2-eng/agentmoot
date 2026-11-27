@@ -47,8 +47,8 @@ class TestHelpPage(unittest.TestCase):
         for kw in ("接入本部署", "5 分钟上手", "moot_list_pending", "issue", "room",
                    "moot_create_issue", "moot_judge", "常见问题"):
             self.assertIn(kw, body)
-        # 端点用请求 Host 推导
-        self.assertIn(f"http://127.0.0.1:{PORT}/agent-api/moot/mcp", body)
+        # 端点用请求 Host 推导（token 模式的 MCP 路径是 /mcp）
+        self.assertIn(f"http://127.0.0.1:{PORT}/mcp", body)
 
     def test_html_lists_all_tools(self):
         _, _, body = get(self.base, "/help")

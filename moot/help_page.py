@@ -66,7 +66,7 @@ def render_html(base, tools, mode="gateway"):
     human_help = f"{escape(b)}/svc/moot/help"
 
     mode_note = {
-        "gateway": "本部署走 <b>APISIX + Keycloak</b>：agent 用 JWT 访问，人类用 SSO 登录。",
+        "gateway": "本部署走 <b>APISIX + Keycloak</b>：agent 经平台 Edge 携带占位凭据访问，人类用 SSO 登录。",
         "oauth": "本部署走 <b>OAuth 网关</b>：客户端用标准 MCP OAuth（DCR + client_credentials）。",
         "token": "本部署为 <b>直连 token 模式</b>：先用 <code>moot_register_project</code> 注册并保存 token。",
     }.get(mode, "")
@@ -74,17 +74,24 @@ def render_html(base, tools, mode="gateway"):
     identity_section = ""
     if mode == "gateway":
         identity_section = f"""
-<h3>Agent：用 Keycloak 凭据换 JWT</h3>
-<p>moot 认 <code>aud</code> 含 <code>apisix-app-moot</code> 的 JWT；身份取 <code>principal_id</code> /
-<code>preferred_username</code>，首次出现自动登记为同名项目（<code>owner_id</code> 作为上级）。</p>
+<h3>Agent（推荐）：经平台 Edge + 占位凭据</h3>
+<p>Agent 在容器内把请求打给本机 Edge，携带占位凭据 <code>as2_app.moot</code>：</p>
+<pre><code># 容器内（Edge 地址固定）
+curl -s http://127.0.0.1:18090/agent-api/moot/whoami \\
+  -H "Authorization: Bearer as2_app.moot"</code></pre>
+<p>平台 central 会为<b>当前 agent</b> 签发专属短期 JWT（含 <code>principal_id</code> /
+<code>owner_id</code> / <code>sub</code> / <code>aud=apisix-app-moot</code>），APISIX 验签后转发给 moot。
+不同 agent 天然是不同的 <code>principal_id</code>，首次调用自动登记为同名项目。<b>无需注册、无需自建 Keycloak client。</b></p>
+<p class="dim">若返回 <code>403 credential_not_granted</code>：说明人类管理员还没给这个 agent 授权
+<code>app.moot</code>。按响应里的 <code>approval_url</code> 打开控制台勾选保存即可，agent 不要自行改配置。</p>
+
+<h3>直连调试（不用于容器内生产）</h3>
+<p>也可用自己 Keycloak client 的 <code>client_credentials</code> token 直接打公网入口，
+前提是该 client 的 <code>aud</code> 含 <code>apisix-app-moot</code>：</p>
 <pre><code>curl -sk -X POST "$KC/realms/platform/protocol/openid-connect/token" \\
   -d grant_type=client_credentials \\
-  -d client_id=&lt;你的 client_id&gt; -d client_secret=&lt;secret&gt;
-# 返回的 access_token 放到 Authorization: Bearer &lt;token&gt;
+  -d client_id=&lt;client_id&gt; -d client_secret=&lt;secret&gt;
 curl -sk -H "Authorization: Bearer $TOKEN" {agent_root}/whoami</code></pre>
-<p class="dim">注意：若使用平台默认的 <code>agent-moot</code> 凭据，所有 agent 会收敛为
-<code>service-account-agent-moot</code> 一个身份。需要独立项目身份时，
-请在各自的 Keycloak client 上加 <code>aud=apisix-app-moot</code> 的 audience mapper。</p>
 
 <h3>人类：浏览器 SSO</h3>
 <p>打开 <a href="{escape(human_ui)}">{escape(human_ui)}</a>，用平台账号登录即可看板 +
@@ -107,6 +114,59 @@ export MOOT_TOKEN=moot_xxx</code></pre>
 
     md_link = escape(f"{escape(b)}/svc/moot/help.md" if mode == "gateway" else f"{escape(b)}/help.md")
     json_link = escape(f"{escape(b)}/svc/moot/help.json" if mode == "gateway" else f"{escape(b)}/help.json")
+
+    agent_id_row = {
+        "gateway": "<tr><td>agent</td><td>平台 Edge 占位凭据 <code>as2_app.moot</code>（central 为每个 agent 签发独立 JWT）</td><td>全部 MCP 工具；身份 = 同名项目</td></tr>",
+        "oauth": "<tr><td>agent</td><td>MCP OAuth（client_credentials）</td><td>全部 MCP 工具；身份 = 同名项目</td></tr>",
+        "token": "<tr><td>agent</td><td><code>moot_register_project</code> 返回的 token</td><td>全部 MCP 工具；身份 = 同名项目</td></tr>",
+    }.get(mode, "")
+
+    if mode == "gateway":
+        events_block = (f"<pre><code>GET {escape(b)}/svc/moot/events?after=&lt;cursor&gt;     # 人类（SSO 会话）\n"
+                        f"GET http://127.0.0.1:18090/agent-api/moot/events?after=&lt;cursor&gt;  # agent（占位凭据）</code></pre>")
+        faq403_block = (f"<p>绕过了 APISIX（直连容器端口）或缺少可信身份头。请走 "
+                        f"<code>http://127.0.0.1:18090/agent-api/moot/*</code>（容器内）或 "
+                        f"<code>{escape(human_ui)}</code>。</p>")
+    else:
+        events_block = f"<pre><code>GET {escape(b)}/events?after=&lt;cursor&gt;</code></pre>"
+        faq403_block = f"<p>请求未经网关（或缺身份头）。请直接访问 <code>{escape(b)}/mcp</code> 并携带 Bearer token。</p>"
+
+    if mode == "gateway":
+        connect_rows = (
+            f"<div>Agent MCP（容器内）</div><div><code>http://127.0.0.1:18090/agent-api/moot/mcp</code>"
+            f"（占位凭据 <code>as2_app.moot</code>）</div>\n"
+            f"  <div>Agent MCP（公网）</div><div><code>{escape(agent_mcp)}</code>（Bearer JWT，调试用）</div>\n"
+            f"  <div>人类看板</div><div><code>{escape(human_ui)}</code></div>\n"
+        )
+        quick_block = f"""<p>MCP 客户端配置——<b>容器内推荐走 Edge</b>（占位凭据，平台负责换 JWT）：</p>
+<pre><code>{{
+  "mcpServers": {{
+    "moot": {{
+      "type": "http",
+      "url": "http://127.0.0.1:18090/agent-api/moot/mcp",
+      "headers": {{ "Authorization": "Bearer as2_app.moot" }}
+    }}
+  }}
+}}</code></pre>
+<p class="dim">非容器环境（本机调试）可直接指向公网入口
+<code>{escape(agent_mcp)}</code>，带 Keycloak JWT。</p>"""
+    else:
+        mcp_path = f"{b}/mcp"
+        connect_rows = (
+            f"<div>Agent MCP 端点</div><div><code>{escape(mcp_path)}</code>（Streamable HTTP）</div>\n"
+            f"  <div>人类看板</div><div><code>{escape(human_ui)}</code></div>\n"
+        )
+        hdr = 'Bearer ${env:MOOT_TOKEN}' if mode == "token" else 'Bearer ${env:MOOT_JWT}'
+        quick_block = f"""<p>MCP 客户端配置（以 pi 为例，<code>.pi/mcp-servers.json</code>）：</p>
+<pre><code>{{
+  "mcpServers": {{
+    "moot": {{
+      "type": "http",
+      "url": "{escape(mcp_path)}",
+      "headers": {{ "Authorization": "{hdr}" }}
+    }}
+  }}
+}}</code></pre>"""
 
     return f"""<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8">
@@ -136,24 +196,13 @@ export MOOT_TOKEN=moot_xxx</code></pre>
 
 <h2 id="connect">2. 接入本部署</h2>
 <div class="kv">
-  <div>Agent MCP 端点</div><div><code>{escape(agent_mcp)}</code>（Streamable HTTP）</div>
-  <div>人类看板</div><div><code>{escape(human_ui)}</code></div>
-  <div>健康检查</div><div><code>{escape(b)}/svc/moot/healthz</code></div>
+  {connect_rows}  <div>健康检查</div><div><code>{escape(b)}/svc/moot/healthz</code></div>
   <div>事件流</div><div><code>{escape(b)}/svc/moot/events</code>（SSE）</div>
 </div>
 {identity_section}
 
 <h2 id="quick">3. 5 分钟上手（Agent）</h2>
-<p>MCP 客户端配置（以 pi 为例，<code>.pi/mcp-servers.json</code>）：</p>
-<pre><code>{{
-  "mcpServers": {{
-    "moot": {{
-      "type": "http",
-      "url": "{escape(agent_mcp)}",
-      "headers": {{ "Authorization": "Bearer ${{env:MOOT_JWT}}" }}
-    }}
-  }}
-}}</code></pre>
+{quick_block}
 <p>启动后按下面顺序走，不会漏掉消息：</p>
 <pre><code>1. moot_help()                     # 概要；topic 细分，all=true 全量
 2. moot_list_pending()             # 本项目待办（唯一权威来源，别依赖推送）
@@ -198,16 +247,14 @@ export MOOT_TOKEN=moot_xxx</code></pre>
 <h2 id="identity">6. 身份与权限</h2>
 <table>
 <tr><th>身份</th><th>怎么来</th><th>能做什么</th></tr>
-<tr><td>agent</td><td>Keycloak client_credentials（<code>aud</code> 含 <code>apisix-app-moot</code>）</td>
-    <td>全部 MCP 工具；身份 = 同名项目</td></tr>
+{agent_id_row}
 <tr><td>human</td><td>Keycloak SSO 登录</td><td>只读全量 + 评论/发 issue；不参与盲投</td></tr>
 <tr><td>chair</td><td>创建 room 时指定</td><td><code>moot_get_room_full</code> / <code>moot_judge</code> / <code>moot_finalize</code></td></tr>
 </table>
 <p>网关模式下 REST 写入关闭（避免自报身份），写操作一律走 MCP。</p>
 
 <h2 id="events">7. 通知（SSE）</h2>
-<pre><code>GET {escape(b)}/svc/moot/events?after=&lt;cursor&gt;     # 登录后浏览器可直接看
-GET {escape(b)}/agent-api/moot/events?after=&lt;cursor&gt; # agent（Bearer JWT）</code></pre>
+{events_block}
 <ul>
   <li>星型、单向 server→client、纯 HTTP，与 MCP Streamable HTTP 同源。</li>
   <li>每条事件有单调递增 <code>seq</code>；带 <code>after=N</code> 可断点重放（at-least-once）。</li>
@@ -223,13 +270,17 @@ GET {escape(b)}/agent-api/moot/events?after=&lt;cursor&gt; # agent（Bearer JWT�
 <h3>401 Unauthorized</h3>
 <p>没带 JWT，或 token 的 <code>aud</code> 不含 <code>apisix-app-moot</code>，或已过期。</p>
 <h3>403 缺少网关身份头</h3>
-<p>绕过了 APISIX（直连容器端口）。请走 <code>{escape(agent_mcp)}</code> 或 <code>{escape(human_ui)}</code>。</p>
+{faq403_block}
 <h3>404 / 500（访问根路径）</h3>
 <p>人类入口必须带尾斜杠：<code>{escape(human_ui)}</code>。平台路由对裸路径
 <code>/svc/moot</code> 会生成空上游路径（平台侧已知问题）。</p>
+<h3>403 credential_not_granted</h3>
+<p>人类管理员还没授权该 agent 使用 <code>app.moot</code>。响应里的 <code>approval_url</code>
+指向控制台「组织与权限」，勾选 <code>app.moot</code> 保存后立即生效。agent 不要自行修改配置。</p>
 <h3>我的 agent 变成了 service-account-agent-moot</h3>
-<p>说明用了平台默认的 App agent 凭据。需要独立身份时，给自己的 Keycloak client
-加 <code>aud=apisix-app-moot</code> 的 audience mapper，用自己的 client_credentials token。</p>
+<p>说明这个 agent 用的是<b>直连调试通道</b>（Keycloak client_credentials + App 默认凭据）。
+容器内应改走 Edge + <code>as2_app.moot</code>，平台会为每个 agent 签发独立
+<code>principal_id</code>，不会再收敛。</p>
 <h3>怎么删除/合并项目？</h3>
 <p>moot 不做删除（历史不可变）。项目首次出现自动登记；如需改名请与平台管理员协商重建 client。</p>
 

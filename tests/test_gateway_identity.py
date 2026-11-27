@@ -139,3 +139,33 @@ def test_trusted_identity_type_wins_over_claims():
 def test_trust_mode_requires_identity():
     assert TRUST.requires_identity() is True
     assert CFG.requires_identity() is False
+
+
+# ── 平台 Edge 签发的“每 agent 专属 JWT”（central issuer）──
+def test_central_issued_agent_token():
+    """central 签发的 token：iss=central，preferred_username=principal_id，无 X-Userinfo。"""
+    claims = {
+        "iss": "https://central.agw.internal/oidc",
+        "sub": "agent-3c17362ef9561b6d",
+        "azp": "agent-3c17362ef9561b6d",
+        "client_id": "agent-3c17362ef9561b6d",
+        "principal_id": "agent-3c17362ef9561b6d",
+        "owner_id": "demo",
+        "preferred_username": "agent-3c17362ef9561b6d",
+        "aud": ["apisix-app-moot"],
+    }
+    h = trust_headers("agent", claims)
+    assert "X-Userinfo" not in h
+    actor = gi.identity(h, TRUST)
+    assert actor == {"principal": "agent-3c17362ef9561b6d", "kind": "agent",
+                     "owner": "demo", "sub": "agent-3c17362ef9561b6d", "mode": "trusted-header"}
+
+
+def test_two_agents_do_not_collapse():
+    """两个不同 agent 的 central token 必须解析为不同 principal（不会收敛）。"""
+    def claims(agent_id):
+        return {"sub": agent_id, "principal_id": agent_id, "owner_id": "demo",
+                "preferred_username": agent_id, "aud": ["apisix-app-moot"]}
+    a = gi.identity(trust_headers("agent", claims("agent-a1")), TRUST)
+    b = gi.identity(trust_headers("agent", claims("agent-b2")), TRUST)
+    assert a["principal"] != b["principal"]

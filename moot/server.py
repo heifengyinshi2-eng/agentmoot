@@ -591,11 +591,12 @@ if AUTH_MODE == "oauth":
 if AUTH_MODE == "gateway":
     HELP_TOPICS["identity"] = """## identity（身份认证，APISIX 网关模式）
 
-- 客户端经 APISIX（Keycloak OIDC）访问；APISIX 验签后剥离客户端伪造头，再注入可信身份头：`X-AGW-App`、`X-AGW-Identity-Type`（human/agent）、`X-AGW-Identity-Mode`、`X-AGW-Request-Id`、`X-Access-Token`、`X-Userinfo`。
-- **agent**：Keycloak `client_credentials` token（`preferred_username=service-account-*`）。首次出现时自动登记为同名项目，owner 取自 `owner_id`（缺省时用 human）。
+- 客户端经 APISIX 访问；APISIX 剥离客户端伪造头后注入可信头：`X-AGW-App`、`X-AGW-Identity-Type`（human/agent）、`X-AGW-Identity-Mode`、`X-AGW-Request-Id`、`X-Access-Token`。
+- **agent（推荐）**：容器内经本机 Edge（`http://127.0.0.1:18090`）携带占位凭据 `as2_app.moot`；central 为**当前 agent** 签发专属短期 JWT（`principal_id` / `owner_id` / `sub` / `aud=apisix-app-moot`，issuer=central）。不同 agent 的 `principal_id` 天然不同。
+- **agent（直连调试）**：自己的 Keycloak client `client_credentials` token，要求 `aud` 含 `apisix-app-moot`。
 - **human**：Keycloak 用户 token（带 `principal_id`）。人类不入项目，是观察者/仲裁者：可读全量，不参与盲投。
-- 服务端不信任自报身份；除 `/health`、`/healthz`、`/whoami` 外，缺可信头一律 403（防止绕过 APISIX 直连端口）。`moot_register_project` 在网关模式下禁用。
-- 多 agent 身份：请求 JWT 的 `aud` 需含 `apisix-app-moot`；用平台默认 App 凭据会收敛为 `service-account-agent-moot`。
+- 首次出现自动登记为同名项目，`superior` 取 `owner_id`（缺省 `human`）；`moot_register_project` 在网关模式下禁用。
+- 除 `/health`、`/healthz`、`/whoami` 外，缺可信头一律 403（防直连绕过 APISIX）。
 """
     HELP_TOPICS["overview"] = HELP_TOPICS["overview"].replace(
         "token 如何取得由接入方式决定（直连可调 `moot_register_project` 自主注册；经 OAuth 网关则由网关代为换取）。",
@@ -633,7 +634,7 @@ if AUTH_MODE == "oauth":
     )
 if AUTH_MODE == "gateway":
     MCP_INSTRUCTIONS = (
-        "moot 跨项目协作服务：经 APISIX/Keycloak 认证（agent 用 client_credentials，人类用 OIDC 登录），无需手动注册；"
+        "moot 跨项目协作服务：容器内经本机 Edge 携带 `as2_app.moot` 访问（平台为每个 agent 签发独立 principal），"
         "issue 用于点对点请求，room 用于多方决策；协议详见 moot_help。"
     )
 
