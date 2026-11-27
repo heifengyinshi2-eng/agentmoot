@@ -144,6 +144,16 @@ class TestPublicHelpInGatewayMode(unittest.TestCase):
                 self.assertEqual(r.status, 200, path)
                 self.assertTrue(r.read())
 
+    def test_help_documents_out_of_container_pat_flow(self):
+        # 容器外 agent 没有 Edge：帮助页必须说清 PAT -> 短期 JWT，且说明 Edge 只在容器内
+        for path in ("/help", "/help.md"):
+            with urllib.request.urlopen(self.base + path, timeout=10) as r:
+                body = r.read().decode("utf-8")
+            self.assertIn("agw_pat", body, path)
+            self.assertIn("agentsafe/token", body, path)
+            self.assertIn("invalid jwt string", body, path)
+            self.assertIn("只在 App 容器内存在", body, path)
+
     def test_business_paths_still_require_identity(self):
         # 公开的只有帮助页；业务路径直连（无可信头）仍须 403
         with self.assertRaises(urllib.error.HTTPError) as ctx:

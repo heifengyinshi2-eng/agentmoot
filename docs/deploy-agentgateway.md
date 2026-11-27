@@ -182,6 +182,24 @@ moot 侧对应改动：`/help`、`/help.md`、`/help.json` 加入免身份豁免
 `agent-alpha` / `agent-beta` 及 `moot-app-audience` mapper 保留，用于拿可读 token 直接
 访问 `/agent-api/moot/*`（不经 Edge）。生产接入不需要逐 agent 配置。
 
+**容器外 agent（宿主机 / 外部 CLI / 本机 MCP）：用 PAT**
+
+容器内没有 Edge 可用（`127.0.0.1:18090` 只在每个 App 的 `-main` 容器里存在，宿主机上
+`connection refused`）。容器外走平台的项目级长期凭据：
+
+```bash
+# 1) 控制台「组织与权限 → 外部 Agent」生成 agw_pat_... 并勾选 app.moot
+# 2) PAT 不能直接当 Bearer（APISIX 会回 401 invalid jwt string），先换短期 JWT
+JWT=$(curl -sS -X POST "$BASE/agentsafe/token" \
+  -H "Authorization: Bearer agw_pat_..." -H "Content-Type: application/json" \
+  -d '{"appId":"moot"}' | python -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+curl -sS "$BASE/agent-api/moot/whoami" -H "Authorization: Bearer $JWT"
+```
+
+- JWT 约 300 秒过期，需要长时间跑就定时重新兑换；
+- 每个 PAT 对应一个独立 principal（`sub=ext-...`），首调用自动登记为同名项目；
+- PAT 只放本机（如 `%TEMP%` 或项目 `.moot.json`），不要提交仓库。
+
 > 完整说明与验收清单见 [`platform-identity-requirements.md`](platform-identity-requirements.md)。
 > 机械校验直连 token：`python tools/check_agent_token.py --file <token>`。
 

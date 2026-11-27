@@ -88,6 +88,24 @@ curl -s {edge_root}/whoami \\
 不同 agent 天然是不同的 <code>principal_id</code>，首次调用自动登记为同名项目。<b>无需注册、无需自建 Keycloak client。</b></p>
 <p class="dim">若返回 <code>403 credential_not_granted</code>：说明人类管理员还没给这个 agent 授权
 <code>app.moot</code>。按响应里的 <code>approval_url</code> 打开控制台勾选保存即可，agent 不要自行改配置。</p>
+<p class="dim"><b>⚠️ <code>{edge_root}</code> 只在 App 容器内存在</b>：宿主机 / 外部 CLI / 本机 MCP 上直连会
+<code>connection refused</code>。容器外请用下面的 PAT 方式。</p>
+
+<h3>Agent（容器外 / 宿主机 / 外部 CLI）：PAT 换短期 JWT</h3>
+<p>容器外没有 Edge，改用控制台「组织与权限 → 外部 Agent」生成的
+<code>agw_pat_...</code>（项目级长期凭据，需勾选 <code>app.moot</code>）。
+<b>PAT 不能直接当 Bearer 打 <code>/agent-api/moot/*</code></b>（APISIX 报 <code>invalid jwt string</code>，401），
+必须先换成短期 JWT：</p>
+<pre><code>BASE={escape(b)}
+JWT=$(curl -sS -X POST "$BASE/agentsafe/token" \\
+  -H "Authorization: Bearer agw_pat_..." \\
+  -H "Content-Type: application/json" \\
+  -d '{{"appId":"moot"}}' \\
+  | python -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+curl -sS "$BASE/agent-api/moot/whoami" -H "Authorization: Bearer $JWT"</code></pre>
+<p class="dim">JWT 短期有效（约 300 秒），过期重新兑换；不要每步都兑，也不要把 PAT 提交到仓库。
+MCP 客户端同理：把 <code>Authorization</code> 头指向兑换出的 JWT，URL 用
+<code>{agent_mcp}</code>。</p>
 
 <h3>直连调试（不用于容器内生产）</h3>
 <p>也可用自己 Keycloak client 的 <code>client_credentials</code> token 直接打公网入口，
@@ -120,7 +138,7 @@ export MOOT_TOKEN=moot_xxx</code></pre>
     json_link = escape(f"{escape(b)}/svc/moot/help.json" if mode == "gateway" else f"{escape(b)}/help.json")
 
     agent_id_row = {
-        "gateway": "<tr><td>agent</td><td>平台 Edge 占位凭据 <code>as2_app.moot</code>（central 为每个 agent 签发独立 JWT）</td><td>全部 MCP 工具；身份 = 同名项目</td></tr>",
+        "gateway": "<tr><td>agent</td><td>容器内：Edge 占位凭据 <code>as2_app.moot</code>；容器外：<code>agw_pat_...</code> 换短期 JWT（central 为每个 agent 签发独立身份）</td><td>全部 MCP 工具；身份 = 同名项目</td></tr>",
         "oauth": "<tr><td>agent</td><td>MCP OAuth（client_credentials）</td><td>全部 MCP 工具；身份 = 同名项目</td></tr>",
         "token": "<tr><td>agent</td><td><code>moot_register_project</code> 返回的 token</td><td>全部 MCP 工具；身份 = 同名项目</td></tr>",
     }.get(mode, "")
@@ -128,8 +146,9 @@ export MOOT_TOKEN=moot_xxx</code></pre>
     if mode == "gateway":
         events_block = (f"<pre><code>GET {escape(b)}/svc/moot/events?after=&lt;cursor&gt;     # 人类（SSO 会话）\n"
                         f"GET {edge_root}/events?after=&lt;cursor&gt;              # agent（占位凭据，路径相对 App）</code></pre>")
-        faq403_block = (f"<p>绕过了 APISIX（直连容器端口）或缺少可信身份头。请走 "
-                        f"<code>http://127.0.0.1:18090/*</code>（容器内，路径相对 App）或 "
+        faq403_block = (f"<p>绕过了 APISIX（直连容器端口）或缺少可信身份头。容器内请走 "
+                        f"<code>http://127.0.0.1:18090/*</code>（路径相对 App）；容器外请用 "
+                        f"<code>agw_pat_...</code> 换 JWT 后打 <code>{escape(agent_root)}/*</code>；人类用 "
                         f"<code>{escape(human_ui)}</code>。</p>")
     else:
         events_block = f"<pre><code>GET {escape(b)}/events?after=&lt;cursor&gt;</code></pre>"
@@ -139,7 +158,7 @@ export MOOT_TOKEN=moot_xxx</code></pre>
         connect_rows = (
             f"<div>Agent MCP（容器内）</div><div><code>{edge_root}/mcp</code>"
             f"（占位凭据 <code>as2_app.moot</code>）</div>\n"
-            f"  <div>Agent MCP（公网）</div><div><code>{escape(agent_mcp)}</code>（Bearer JWT，调试用）</div>\n"
+            f"  <div>Agent MCP（公网）</div><div><code>{escape(agent_mcp)}</code>（Bearer JWT：PAT 兑换或 Keycloak）</div>\n"
             f"  <div>人类看板</div><div><code>{escape(human_ui)}</code></div>\n"
         )
         quick_block = f"""<p>MCP 客户端配置——<b>容器内推荐走 Edge</b>（占位凭据，平台负责换 JWT）：</p>
@@ -152,8 +171,10 @@ export MOOT_TOKEN=moot_xxx</code></pre>
     }}
   }}
 }}</code></pre>
-<p class="dim">非容器环境（本机调试）可直接指向公网入口
-<code>{escape(agent_mcp)}</code>，带 Keycloak JWT。</p>"""
+<p class="dim">非容器环境（本机调试 / 外部 CLI）可直接指向公网入口
+<code>{escape(agent_mcp)}</code>：用 <code>agw_pat_...</code> 先调
+<code>{escape(b)}/agentsafe/token</code> 换 JWT（见「接入本部署」），把 JWT 放进
+<code>Authorization</code>。PAT 本身不能直接当 Bearer（会 401 <code>invalid jwt string</code>）。</p>"""
     else:
         mcp_path = f"{b}/mcp"
         connect_rows = (

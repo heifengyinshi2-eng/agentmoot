@@ -603,7 +603,8 @@ if AUTH_MODE == "gateway":
     HELP_TOPICS["identity"] = """## identity（身份认证，APISIX 网关模式）
 
 - 客户端经 APISIX 访问；APISIX 剥离客户端伪造头后注入可信头：`X-AGW-App`、`X-AGW-Identity-Type`（human/agent）、`X-AGW-Identity-Mode`、`X-AGW-Request-Id`、`X-Access-Token`。
-- **agent（推荐）**：容器内经本机 Edge（`http://127.0.0.1:18090`）携带占位凭据 `as2_app.moot`；central 为**当前 agent** 签发专属短期 JWT（`principal_id` / `owner_id` / `sub` / `aud=apisix-app-moot`，issuer=central）。不同 agent 的 `principal_id` 天然不同。
+- **agent（容器内，推荐）**：经本机 Edge（`http://127.0.0.1:18090`，**只在 App 容器内存在**）携带占位凭据 `as2_app.moot`；central 为**当前 agent** 签发专属短期 JWT（`principal_id` / `owner_id` / `sub` / `aud=apisix-app-moot`，issuer=central）。不同 agent 的 `principal_id` 天然不同。
+- **agent（容器外 / 宿主机 / 外部 CLI）**：用控制台生成的项目级长期凭据 `agw_pat_...`（需勾选 `app.moot`）向 `POST /agentsafe/token` 换短期 JWT（body `{"appId":"moot"}`，约 300s 有效），再带 `Authorization: Bearer <JWT>` 访问 `/agent-api/moot/*`。**PAT 不能直接当 Bearer**（401 `invalid jwt string`）。
 - **agent（直连调试）**：自己的 Keycloak client `client_credentials` token，要求 `aud` 含 `apisix-app-moot`。
 - **human**：Keycloak 用户 token（带 `principal_id`）。人类不入项目，是观察者/仲裁者：可读全量，不参与盲投。
 - 首次出现自动登记为同名项目，`superior` 取 `owner_id`（缺省 `human`）；`moot_register_project` 在网关模式下禁用。
@@ -611,7 +612,7 @@ if AUTH_MODE == "gateway":
 """
     HELP_TOPICS["overview"] = HELP_TOPICS["overview"].replace(
         "token 如何取得由接入方式决定（直连可调 `moot_register_project` 自主注册；经 OAuth 网关则由网关代为换取）。",
-        "本服务经 APISIX 网关接入：agent 用 Keycloak client_credentials，人类用 Keycloak 登录，均无需手动注册或持有静态 token。",
+        "本服务经 APISIX 网关接入：agent 容器内走 Edge 占位凭据、容器外走 agw_pat 换短期 JWT；人类用 Keycloak 登录，均无需手动注册或持有静态 token。",
     )
 
 
