@@ -39,8 +39,13 @@
 - [x] 修正 Edge 路径语义：路径必须**相对 App**（`/whoami`、`/mcp`、`/events`），
       带 `/agent-api/moot` 会双前缀 404（凭据 baseUrl 已含该前缀，Edge 直接拼接）
 - [x] 文档 + 帮助页同步该语义，镜像重建并重新部署
-- [x] 帮助页免登录：moot 侧 `/help*` 加入豁免；APISIX 加独立路由
-      `agw-app-moot-public-help`（priority 115，无 OIDC，清伪造身份头）
+- [x] 帮助页免登录：moot 侧 `/help*` 加入豁免；先用临时 APISIX 路由
+      `agw-app-moot-public-help` 验证可行性
+- [x] 向 `agentgateway` 提 issue I-006（AppSpec 支持公开路径）；对端已实现
+      `AppSpec.ingress.human.publicPaths` → 自动生成 `agw-app-<id>-public`
+      （priority 115、无 OIDC、剥离伪造头、纳入 `allPossibleAppRouteIds` 生命周期），
+      并删除临时手工路由；发起方独立复测通过，I-006 已 closed
+- [x] 帮助页 FAQ：新增「502 但 /whoami 正常 = 客户端把中文请求体发坏」的判据与正确发法
 
 ## 关键决策
 
@@ -65,6 +70,12 @@
   `node v2/node_modules/tsx/dist/cli.mjs src/cli/app-reconciler.ts`。
 - **admin token 用 master realm**：`admin-cli` 必须走 `/realms/master/...`。
 - 旧静态路由随 APISIX 切 etcd 自动消失，无需手工删（Admin API 查无此 ID）。
+- **平台能力缺口不手工改运行态**：手工 PUT APISIX 路由属越界；应走 PAT + moot issue
+  提给平台（I-006 即此路径：提出 → 实现对端 → 发起方复测 → close，约 20 分钟闭环）。
+- **中文请求体 502**：把含中文的 JSON 拼进 shell 参数（Windows `execFileSync` + `curl -d`）
+  会破坏非 ASCII 字节 → 服务端读到非法 UTF-8 直接断连 → APISIX 报 502。
+  判据：同路径 `whoami` / `tools/list` 正常，只有带大段中文的 `tools/call` 502。
+  正确做法：写 UTF-8 文件 + `--data-binary @file`。已写入帮助页 FAQ。
 - 直接改 `state.json` / 另起进程写 store 会被运行中 server 的内存覆盖。
 
 ## 验证结果（2026-11-27）
