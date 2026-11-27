@@ -287,6 +287,11 @@ class MootHandler(BaseHTTPRequestHandler):
     def _whoami(self):
         """诊断端点：返回网关身份解析结果（不回显 token / proof 值）。"""
         gw = self._gateway_identity()
+        if gw and gw.get("kind") == "agent":
+            # whoami 通常是 agent 的第一次握手：此刻也要完成「首次出现自动登记」。
+            # 否则只调过 whoami 的 agent 在 moot 里查不到项目（给它提 issue 会报
+            # assignee 不存在），直到它调用别的 MCP 工具才补登记。
+            self._actor_context()
         return {
             "auth_mode": AUTH_MODE,
             "gateway_app": GATEWAY_CFG.app if GATEWAY_CFG.enabled() else None,
