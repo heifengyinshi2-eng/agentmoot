@@ -39,6 +39,9 @@ MVP 已落地（2026-11）：核心存储 + 状态机 + HTTP 服务 + **标准 M
 - `docs/room-process.md` — room 核心流程（提案收敛、表态三态、chair 职责、决议确认）
 - `docs/committee-code.md` — 参会成员守则（发言质量规范，注入 Agent prompt）
 - `docs/implementation.md` — MVP 实现设计（技术选型、模块布局、存储/状态机/CLI）
+- `docs/deploy-agentgateway.md` — 部署到 agentgateway（AppRegistry）与身份契约
+- `docs/platform-identity-requirements.md` — 平台身份能力要求（每 agent 一个 Keycloak client、principal_id / owner_id / aud），供平台确认
+- `tools/check_agent_token.py` — 机械校验 agent token 是否满足上述契约
 
 ## MVP 代码
 

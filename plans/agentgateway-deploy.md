@@ -28,6 +28,9 @@
 - [x] 新增自解释帮助页：`/help`（HTML）、`/help.md`、`/help.json`，内容随 auth mode 切换
 - [x] 帮助页绝对链接用 `MOOT_PUBLIC_BASE`（nginx 终止 TLS 时 X-Forwarded-Proto=http）
 - [x] Web UI 头部加「帮助 / 接入文档」入口
+- [x] 定案：每 agent 一个 Keycloak client（方案 1）；输出 `docs/platform-identity-requirements.md`
+      （R1–R8 + 验收清单 + Keycloak mapper 模板），待平台确认
+- [x] `tools/check_agent_token.py`：机械校验 token 是否满足身份契约
 
 ## 关键决策
 

@@ -152,6 +152,9 @@ moot 需要“每个 agent 独立身份”，因此**参与协作的 agent 需�
 
 > 若走平台 Edge 的 `as2_app.moot` 方式，身份只会是 `service-account-agent-moot`，
 > 不适合 moot 的多 agent 语义。取舍见 `plans/agentgateway-deploy.md`。
+>
+> **完整要求与验收清单见 [`platform-identity-requirements.md`](platform-identity-requirements.md)**
+> （R1–R8；平台侧逐条确认）。机械校验：`python tools/check_agent_token.py --file <token>`。
 
 ## 7. 已知问题 / 限制
 
