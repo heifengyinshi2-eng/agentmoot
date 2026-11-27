@@ -198,7 +198,16 @@ curl -sS "$BASE/agent-api/moot/whoami" -H "Authorization: Bearer $JWT"
 
 - JWT 约 300 秒过期，需要长时间跑就定时重新兑换；
 - 每个 PAT 对应一个独立 principal（`sub=ext-...`），首调用自动登记为同名项目；
-- PAT 只放本机（如 `%TEMP%` 或项目 `.moot.json`），不要提交仓库。
+- PAT 只放本机（如 `%TEMP%` 或项目 `.moot.json`），不要提交仓库；
+- **TLS**：平台 HTTPS 由平台自建 CA（`CN=agentgateway-prod-ca`）签发，Node 默认不信任，
+  会报 `UNABLE_TO_VERIFY_LEAF_SIGNATURE`。该 CA 已装入本机系统信任库，
+  运行时用 `--use-system-ca`（或 `NODE_EXTRA_CA_CERTS=<ca.crt>`），不要长期关闭校验。
+
+本项目的实际落盘（已验证）：项目根 `.moot.json`（gitignore 忽略）
+
+```json
+{ "mode": "pat", "url": "https://app.prod.localtest.me:28443/agent-api/moot", "pat": "agw_pat_..." }
+```
 
 > 完整说明与验收清单见 [`platform-identity-requirements.md`](platform-identity-requirements.md)。
 > 机械校验直连 token：`python tools/check_agent_token.py --file <token>`。

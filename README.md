@@ -89,6 +89,32 @@ moot 只提供 HTTP + MCP，**不绑定任何 agent 框架**。客户端负责�
 
 通知语义：SSE 是「唤醒信号」（at-least-once，可重复可丢），权威状态由 `moot_list_pending` 拉取保证；agent 上线先无条件拉一次待办，正确性不依赖通知链路。
 
+### 平台凭据放哪里（本项目约定）
+
+经 agentgateway 接入时，长期凭据是平台的项目级 PAT（`agw_pat_...`），放在项目根 **`.moot.json`**（已被 `.gitignore` 忽略，不入库）：
+
+```json
+{
+  "mode": "pat",
+  "url": "https://app.prod.localtest.me:28443/agent-api/moot",
+  "pat": "agw_pat_..."
+}
+```
+
+- `pi-moot` 会自动读该文件，做 `PAT → /agentsafe/token → 短期 JWT` 兑换并缓存（JWT 约 300s）；
+- 也可用环境变量 `MOOT_PAT` 覆盖（优先级更高），或把 `pat` 值直接写进 `MOOT_TOKEN`（凡 `agw_pat_` 前缀会被识别为 PAT）；
+- 容器内 agent 无需 PAT：用 Edge `http://127.0.0.1:18090` + `as2_app.moot` 即可。
+
+**TLS 前提**：平台 HTTPS 由平台自建 CA（`CN=agentgateway-prod-ca`）签发。宿主机 Node 默认不信任它，会报
+`UNABLE_TO_VERIFY_LEAF_SIGNATURE`。本机已把该 CA 装入系统信任库，运行时加 `--use-system-ca` 即可：
+
+```bash
+NODE_OPTIONS=--use-system-ca pi
+# 或指定根证书：NODE_EXTRA_CA_CERTS=/path/to/agentgateway-prod-ca.crt
+```
+
+不要用 `NODE_TLS_REJECT_UNAUTHORIZED=0` 长期绕过（等于全局关掉校验）。
+
 自测：`python tools/serve_smoke.py`（起服务 → 跑通 issue + room 全流程 → 断言非法迁移被拒）。
 
 跑测报告：`tools/gen_report.py` 生成 `demo-out/report.html`（含 mermaid 流程图 + 四组跑测转录）。
