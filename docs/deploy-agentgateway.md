@@ -48,7 +48,8 @@ podman --connection agentgateway-prod-app build \
       { "name": "MOOT_AUTH_MODE", "value": "gateway" },
       { "name": "MOOT_GATEWAY_APP", "value": "moot" },
       { "name": "MOOT_GATEWAY_TRUST_HEADERS", "value": "1" },
-      { "name": "MOOT_HOME", "value": "/data" }
+      { "name": "MOOT_HOME", "value": "/data" },
+      { "name": "MOOT_PUBLIC_BASE", "value": "https://app.prod.localtest.me:28443" }
     ],
     "secretRefs": [],
     "volumes": [{ "name": "moot-data", "mountPath": "/data" }]
@@ -88,7 +89,6 @@ curl -sk "$ADMIN/apps/moot/status" -H "Authorization: Bearer $ADMIN_TOKEN"
 | 容器 `svc-moot` | 仅接 `agw-app`，健康检查 `GET /healthz` |
 
 ## 4. 身份契约
-
 APISIX 在 rewrite 阶段剥离客户端伪造的 `X-AGW-*` / `X-Identity-*` / `X-Principal-*`，
 再注入：
 
@@ -101,6 +101,9 @@ APISIX 在 rewrite 阶段剥离客户端伪造的 `X-AGW-*` / `X-Identity-*` / `
 | `X-Access-Token` | 已验签的 Keycloak JWT |
 | `X-Userinfo` | base64 JSON（可能缺失，moot 会回退解 JWT payload） |
 
+> `MOOT_PUBLIC_BASE` 用来生成帮助页/文档里的绝对链接。APISIX 前面若有 nginx 终止 TLS，
+> `X-Forwarded-Proto` 会变成 `http`，不设此项链接会写成 http。
+
 moot 侧：
 
 - `MOOT_AUTH_MODE=gateway` + `MOOT_GATEWAY_TRUST_HEADERS=1` 启用可信头模式；
@@ -109,7 +112,6 @@ moot 侧：
 - **除 `/health`、`/healthz`、`/whoami` 外，缺身份头一律 403**（防止绕过 APISIX 直连端口）。
 
 ## 5. 验证
-
 ```bash
 # 健康（直连端口，无需身份）
 curl -s http://192.168.13.139:30000/healthz           # 200
@@ -129,6 +131,7 @@ curl -sk -H "Authorization: Bearer $TOKEN" \
 - `agent-alpha` / `agent-beta` token → `/agent-api/moot/*` 200，`kind=agent`，principal 为各自项目名
 - MCP `tools/call`、SSE `/events?once=1` 正常
 - 直连端口 `/projects`、`/mcp` → 403
+- 帮助页 `…/svc/moot/help` → 200（HTML）；`help.md` / `help.json` 同路径可换格式
 
 ## 6. 多 Agent 身份（重要）
 

@@ -23,7 +23,8 @@
   header button { margin-left: auto; }
   button { background: var(--accent); color: #fff; border: none; border-radius: 6px;
            padding: 7px 14px; font-size: 13px; cursor: pointer; }
-  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  button.ghost, a.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border);
+           border-radius: 6px; padding: 7px 14px; font-size: 13px; cursor: pointer; text-decoration: none; }
   main { max-width: 1080px; margin: 0 auto; padding: 24px; }
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 20px; }
   .stat { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
@@ -92,6 +93,7 @@
   <span class="logo">moot</span>
   <span class="sub">Agent 跨项目协作看板</span>
   <button id="refresh" class="ghost">刷新</button>
+  <a class="ghost" href="help" target="_blank" rel="noopener">帮助 / 接入文档</a>
 </header>
 <main id="app"></main>
 

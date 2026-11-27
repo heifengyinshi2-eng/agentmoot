@@ -25,6 +25,9 @@
 - [x] 清理旧部署物：`agw-svc-moot` 路由、`apisix-moot` client、`AGW_PROOF_SECRET_MOOT`、
       podman secret `moot_proof`、`deploy/agentgateway/` 脚本
 - [x] 文档重写 `docs/deploy-agentgateway.md`
+- [x] 新增自解释帮助页：`/help`（HTML）、`/help.md`、`/help.json`，内容随 auth mode 切换
+- [x] 帮助页绝对链接用 `MOOT_PUBLIC_BASE`（nginx 终止 TLS 时 X-Forwarded-Proto=http）
+- [x] Web UI 头部加「帮助 / 接入文档」入口
 
 ## 关键决策
 

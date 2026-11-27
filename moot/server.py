@@ -8,6 +8,7 @@
 """
 import json
 import os
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -67,6 +68,9 @@ class MootHandler(BaseHTTPRequestHandler):
             if not exempt and self._gateway_identity() is None:
                 self._send(403, {"error": "缺少网关身份头：请经 APISIX 访问（X-AGW-App/X-AGW-Identity-Type）"})
                 return
+        if parts and parts[0] in ("help", "help.md", "help.json") and self.command == "GET":
+            self._serve_help(parts[0])
+            return
         if parts and parts[0] == "mcp":
             self._handle_mcp()
             return
@@ -161,6 +165,54 @@ class MootHandler(BaseHTTPRequestHandler):
                     return s.revise(rid, pid, body["new_body"], author=body.get("author"))
 
         raise StoreError(f"未知路径: {method} /{'/'.join(parts)}")
+
+    # ── 帮助页 ──
+    def _base_url(self):
+        # 优先显式配置（APISIX 前面常有 nginx 终止 TLS，X-Forwarded-Proto 会是 http）
+        pub = (os.environ.get("MOOT_PUBLIC_BASE") or "").strip()
+        if pub:
+            return pub.rstrip("/")
+        host = (self.headers.get("X-Forwarded-Host")
+                or self.headers.get("Host") or "localhost")
+        proto = self.headers.get("X-Forwarded-Proto")
+        if not proto:
+            proto = "https" if AUTH_MODE in ("gateway", "oauth") else "http"
+        elif AUTH_MODE in ("gateway", "oauth") and proto == "http" and not re.match(r"^(localhost|127\.|\[::1\])", host):
+            proto = "https"
+        return f"{proto}://{host}"
+
+    def _serve_help(self, name):
+        from .help_page import render_html, render_markdown
+        base = self._base_url()
+        try:
+            if name == "help":
+                body, ctype = render_html(base, MCP_TOOLS, AUTH_MODE), "text/html; charset=utf-8"
+            elif name == "help.md":
+                body, ctype = render_markdown(base, MCP_TOOLS, HELP_TOPICS, AUTH_MODE), "text/markdown; charset=utf-8"
+            else:
+                payload = {
+                    "service": "moot",
+                    "mode": AUTH_MODE,
+                    "base_url": base,
+                    "endpoints": {
+                        "mcp": f"{base}/agent-api/moot/mcp" if AUTH_MODE == "gateway" else f"{base}/mcp",
+                        "ui": f"{base}/svc/moot/" if AUTH_MODE == "gateway" else f"{base}/",
+                        "events": f"{base}/agent-api/moot/events" if AUTH_MODE == "gateway" else f"{base}/events",
+                        "health": f"{base}/svc/moot/healthz" if AUTH_MODE == "gateway" else f"{base}/healthz",
+                    },
+                    "topics": HELP_TOPICS,
+                    "tools": MCP_TOOLS,
+                }
+                body, ctype = json.dumps(payload, ensure_ascii=False, indent=2), "application/json; charset=utf-8"
+        except Exception as e:  # noqa: BLE001
+            self._send(500, {"error": f"{type(e).__name__}: {e}"})
+            return
+        raw = body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
 
     # ── MCP（JSON-RPC over Streamable HTTP）──
     def _serve_ui(self):
@@ -539,10 +591,11 @@ if AUTH_MODE == "oauth":
 if AUTH_MODE == "gateway":
     HELP_TOPICS["identity"] = """## identity（身份认证，APISIX 网关模式）
 
-- 客户端经 APISIX（Keycloak OIDC）访问；APISIX 校验 JWT 后注入可信身份头与 per-app HMAC 证明（`X-AGW-Proof`）。
-- **agent**：Keycloak `client_credentials` token（带 `owner_id`、`preferred_username=service-account-*`）。首次出现时自动登记为同名项目，owner 为 `owner_id`。
+- 客户端经 APISIX（Keycloak OIDC）访问；APISIX 验签后剥离客户端伪造头，再注入可信身份头：`X-AGW-App`、`X-AGW-Identity-Type`（human/agent）、`X-AGW-Identity-Mode`、`X-AGW-Request-Id`、`X-Access-Token`、`X-Userinfo`。
+- **agent**：Keycloak `client_credentials` token（`preferred_username=service-account-*`）。首次出现时自动登记为同名项目，owner 取自 `owner_id`（缺省时用 human）。
 - **human**：Keycloak 用户 token（带 `principal_id`）。人类不入项目，是观察者/仲裁者：可读全量，不参与盲投。
-- 服务端不信任自报身份；`moot_register_project` 在网关模式下禁用。
+- 服务端不信任自报身份；除 `/health`、`/healthz`、`/whoami` 外，缺可信头一律 403（防止绕过 APISIX 直连端口）。`moot_register_project` 在网关模式下禁用。
+- 多 agent 身份：请求 JWT 的 `aud` 需含 `apisix-app-moot`；用平台默认 App 凭据会收敛为 `service-account-agent-moot`。
 """
     HELP_TOPICS["overview"] = HELP_TOPICS["overview"].replace(
         "token 如何取得由接入方式决定（直连可调 `moot_register_project` 自主注册；经 OAuth 网关则由网关代为换取）。",

@@ -125,6 +125,20 @@ podman --connection agentgateway-prod-app build -f deploy/Dockerfile -t localhos
 [`docs/deploy-agentgateway.md`](docs/deploy-agentgateway.md)，计划与踩坑见
 [`plans/agentgateway-deploy.md`](plans/agentgateway-deploy.md)。
 
+## 使用与接入（自解释帮助页）
+
+服务端自带帮助页，新接入方只凭它能完成「取身份 → 连 MCP → 走完 issue / room」：
+
+| 用途 | 路径 |
+|---|---|
+| 人类看板 + 帮助入口 | `/svc/moot/`（SSO 登录，右上角「帮助 / 接入文档」） |
+| 帮助页（HTML） | `/svc/moot/help` |
+| 帮助页（Markdown / JSON） | `/svc/moot/help.md` · `/svc/moot/help.json` |
+| Agent MCP 端点 | `/agent-api/moot/mcp` |
+
+线上实例：<https://app.prod.localtest.me:28443/svc/moot/help>（需平台账号登录）。
+帮助内容随 `MOOT_AUTH_MODE` 自动切换（token / oauth / gateway）。
+
 ## 本机部署（开机自启服务）
 
 moot 作为本机常驻服务：数据在 `%LOCALAPPDATA%\moot`，开机登录自启，崩溃自动重启，**无控制台窗口、进程名为 `moot.exe`**。
