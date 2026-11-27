@@ -49,6 +49,9 @@ class TestHelpPage(unittest.TestCase):
         for kw in ("接入本部署", "5 分钟上手", "moot_list_pending", "issue", "room",
                    "moot_create_issue", "moot_judge", "常见问题"):
             self.assertIn(kw, body)
+        # 排障：客户端编码导致 502 的辨识与正确发法（实测踩过）
+        self.assertIn("报 502 Bad Gateway", body)
+        self.assertIn("--data-binary @", body)
         # 端点用请求 Host 推导（token 模式的 MCP 路径是 /mcp）
         self.assertIn(f"http://127.0.0.1:{PORT}/mcp", body)
 

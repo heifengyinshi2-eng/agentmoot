@@ -578,7 +578,9 @@ issue：moot_create_issue、moot_review_issue、moot_resolve_issue、moot_close_
 room：moot_create_room、moot_submit、moot_judge、moot_revise、moot_finalize
 帮助：moot_help(topic?, all?)
 
-完整参数见 `tools/list`（MCP inputSchema）。""",
+完整参数见 `tools/list`（MCP inputSchema）。
+
+排障：若 GET /whoami 与 tools/list 正常、但带大段中文的 tools/call 报 502，先怀疑**客户端把请求体发坏了**（shell 参数转码）。把 JSON 写成 UTF-8 文件后 `--data-binary @file` 发送。""",
 }
 
 # 接入方式：token（直连）/ oauth（标准 MCP OAuth 网关）/ gateway（APISIX 可信身份头）。

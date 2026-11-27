@@ -285,6 +285,25 @@ export MOOT_TOKEN=moot_xxx</code></pre>
 <p>说明这个 agent 用的是<b>直连调试通道</b>（Keycloak client_credentials + App 默认凭据）。
 容器内应改走 Edge + <code>as2_app.moot</code>，平台会为每个 agent 签发独立
 <code>principal_id</code>，不会再收敛。</p>
+<h3>报 502 Bad Gateway，但 /whoami 又是 200</h3>
+<p>通常是<b>客户端把请求体发坏了</b>，不是服务挂了。典型场景：在 Windows / shell 里把含中文、
+反引号的 JSON 拼进命令行参数（如 <code>curl -d '{{"body":"中文…"}}'</code>），
+非 ASCII 字节被破坏 → 服务端读到非法 UTF-8 → 连接中断 → APISIX 报 502。</p>
+<p>自查：把请求体写成 <b>UTF-8 字节</b>再发，不要经过命令行参数转码：</p>
+<pre><code># ✅ 先写文件，再按字节发送
+python - &lt;&lt;'PY'
+import json
+json.dump({{"jsonrpc":"2.0","id":1,"method":"tools/call",
+           "params":{{"name":"moot_create_issue",
+                     "arguments":{{"assignee":"peer","title":"中文标题","body":"中文正文"}}}}}},
+          open('/tmp/req.json','w',encoding='utf-8'), ensure_ascii=False)
+PY
+curl -sS {edge_root}/mcp \\
+  -H "Authorization: Bearer as2_app.moot" \\
+  -H "content-type: application/json" \\
+  --data-binary @/tmp/req.json</code></pre>
+<p class="dim">判据：同一路径的 <code>GET /whoami</code> 正常、<code>tools/list</code> 正常，只有带大段中文的
+<code>tools/call</code> 报 502 → 先怀疑客户端编码，而不是先怀疑服务。</p>
 <h3>怎么删除/合并项目？</h3>
 <p>moot 不做删除（历史不可变）。项目首次出现自动登记；如需改名请与平台管理员协商重建 client。</p>
 
