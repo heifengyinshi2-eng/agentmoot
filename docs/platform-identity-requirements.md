@@ -77,12 +77,27 @@ agent 第一次访问 `app.moot` 时，如果人类管理员还没授权，会�
 | 步骤 | 结果 |
 |---|---|
 | `prodvm1-main` 内 `POST /_agentsafe/identity` | 200，`status=authorized`，credential `as2_tk_020a60fb7213` |
-| `prodvm1-main` 内 `GET 127.0.0.1:18090/agent-api/moot/whoami -H "Authorization: Bearer as2_app.moot"` | **403 `credential_not_granted`**（尚未授权，返回 approval_url） |
+| 授权前：同上 | **403 `credential_not_granted`**（返回 approval_url） |
+| 授权后：同上 | **502 `upstream_unreachable`** —— 授权已生效（exchange 成功），但 Edge 访问 `https://app.prod.localtest.me:28443` 不可达 |
+| 诊断：agent 容器内 `app.prod.localtest.me` 解析 | 容器 DNS 指到自身回环（VM 侧 `/etc/hosts` 为 `::1 app.prod.localtest.me`），容器内连接被拒 |
+| 诊断：临时容器加 `--add-host app.prod.localtest.me:169.254.1.2` | **401**（打通到 APISIX，说明只差 hosts/DNS 映射 + SNI） |
+| 诊断：nginx 严格 SNI | 用 IP 作 SNI（`https://127.0.0.1:28443`）握手失败，用正确域名 + `--resolve` 正常 |
 | 直连公网 + `agent-alpha` client_credentials JWT | 200，`kind=agent`，principal `agent-alpha` |
 | 直连公网 + human SSO | 200，`kind=human`，UI/帮助页正常 |
 | 直连容器端口（无身份头） | 403 |
 
 > 授权 `app.moot` 后应复测第 2 行 → 期望 200，`principal` 为该 agent 的 id（每个 agent 不同）。
+
+## 5.1 当前阻塞（平台侧，2026-11-27）
+
+Agent 容器无法解析到平台入口：
+
+- agent VM 的 `/etc/hosts` 有 `::1 app.prod.localtest.me`，容器内 DNS 继承后指向自身回环；
+- nginx 严格校验 SNI，用 IP 直连会握手失败；
+- 实测：容器加 `--add-host app.prod.localtest.me:169.254.1.2` 后同一请求返回 401（入口可达）。
+
+**需要平台做**：给 agent pod / Edge 注入入口 hosts 映射（如 `169.254.1.2 app.prod.localtest.me auth.prod.localtest.me`），
+或提供 agent 网络内可达的内部入口地址。之后按 §6 复测。
 
 ## 6. 验收清单（授权后执行）
 
